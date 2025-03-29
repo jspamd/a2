@@ -1,30 +1,45 @@
 const express = require('express');
 const router = express.Router();
 const workflowController = require('../controllers/workflow.controller');
-const authMiddleware = require('../middlewares/auth.middleware');
+const { verifyToken, checkRole } = require('../middleware/auth');
 
-// 获取所有工作流
-router.get('/', authMiddleware.verifyToken, workflowController.getAllWorkflows);
+// 所有工作流路由都需要认证
+router.use(verifyToken);
 
-// 获取单个工作流
-router.get('/:id', authMiddleware.verifyToken, workflowController.getWorkflow);
+// 工作流定义相关路由
+// 获取工作流定义列表 - 所有用户可访问
+router.get('/', workflowController.getAllWorkflowDefinitions);
 
-// 创建工作流
-router.post('/', authMiddleware.verifyToken, workflowController.createWorkflow);
+// 获取工作流定义详情 - 所有用户可访问
+router.get('/:id', workflowController.getWorkflowDefinitionById);
 
-// 更新工作流
-router.put('/:id', authMiddleware.verifyToken, workflowController.updateWorkflow);
+// 创建工作流定义 - 仅限管理员和经理
+router.post('/', checkRole(['admin', 'manager']), workflowController.createWorkflowDefinition);
 
-// 删除工作流
-router.delete('/:id', authMiddleware.verifyToken, workflowController.deleteWorkflow);
+// 更新工作流定义 - 仅限管理员、经理和创建者
+router.put('/:id', checkRole(['admin', 'manager']), workflowController.updateWorkflowDefinition);
 
-// 提交审批
-router.post('/:id/submit', authMiddleware.verifyToken, workflowController.submitWorkflow);
+// 删除工作流定义 - 仅限管理员
+router.delete('/:id', checkRole(['admin']), workflowController.deleteWorkflowDefinition);
 
-// 审批操作
-router.post('/:id/approve', authMiddleware.verifyToken, workflowController.approveWorkflow);
+// 工作流实例相关路由
+// 启动工作流实例 - 所有用户可访问
+router.post('/:id/instances', workflowController.createWorkflowInstance);
 
-// 拒绝操作
-router.post('/:id/reject', authMiddleware.verifyToken, workflowController.rejectWorkflow);
+// 获取工作流实例列表 - 所有用户可访问
+router.get('/instances', workflowController.getMyWorkflowInstances);
+
+// 获取工作流实例详情 - 所有用户可访问（权限检查在控制器中）
+router.get('/instances/:id', workflowController.getWorkflowInstanceById);
+
+// 取消工作流实例 - 所有用户可访问（权限检查在控制器中）
+router.post('/instances/:id/cancel', workflowController.cancelWorkflowInstance);
+
+// 工作流任务相关路由
+// 获取我的待办任务列表 - 所有用户可访问
+router.get('/tasks/my', workflowController.getMyPendingApprovals);
+
+// 处理任务 - 所有用户可访问（权限检查在控制器中）
+router.post('/tasks/:id/process', workflowController.processTask);
 
 module.exports = router; 

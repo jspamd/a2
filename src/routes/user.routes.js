@@ -1,109 +1,51 @@
 const express = require('express');
 const router = express.Router();
+const userController = require('../controllers/user.controller');
 const { verifyToken, checkRole } = require('../middleware/auth');
+const { userValidators, validate } = require('../middleware/validator');
 
-// 路由处理函数
-// 注意：这里暂时用简单的处理函数代替，实际应用中应该引入用户控制器
-const userController = {
-  getAllUsers: (req, res) => {
-    res.status(200).json({
-      status: 'success',
-      message: '获取所有用户成功',
-      data: [
-        { id: 1, username: 'admin', name: '系统管理员', email: 'admin@example.com', role: 'admin' },
-        { id: 2, username: 'manager1', name: '王五', email: 'manager1@example.com', role: 'manager' },
-        { id: 3, username: 'user1', name: '张三', email: 'user1@example.com', role: 'employee' }
-      ]
-    });
-  },
-  
-  getUserById: (req, res) => {
-    const userId = req.params.id;
-    res.status(200).json({
-      status: 'success',
-      message: '获取用户成功',
-      data: { id: userId, username: 'admin', name: '系统管理员', email: 'admin@example.com', role: 'admin' }
-    });
-  },
-  
-  createUser: (req, res) => {
-    res.status(201).json({
-      status: 'success',
-      message: '用户创建成功',
-      data: { id: 4, ...req.body }
-    });
-  },
-  
-  updateUser: (req, res) => {
-    const userId = req.params.id;
-    res.status(200).json({
-      status: 'success',
-      message: '用户更新成功',
-      data: { id: userId, ...req.body }
-    });
-  },
-  
-  deleteUser: (req, res) => {
-    const userId = req.params.id;
-    res.status(200).json({
-      status: 'success',
-      message: '用户删除成功',
-      data: { id: userId }
-    });
-  },
-  
-  getUserRoles: (req, res) => {
-    const userId = req.params.id;
-    res.status(200).json({
-      status: 'success',
-      message: '获取用户角色成功',
-      data: [
-        { id: 1, name: '系统管理员', code: 'admin' }
-      ]
-    });
-  },
-  
-  updateUserRoles: (req, res) => {
-    const userId = req.params.id;
-    res.status(200).json({
-      status: 'success',
-      message: '用户角色更新成功',
-      data: { userId, roles: req.body.roles }
-    });
-  },
-  
-  resetPassword: (req, res) => {
-    const userId = req.params.id;
-    res.status(200).json({
-      status: 'success',
-      message: '密码重置成功',
-      data: { userId }
-    });
-  }
-};
+// 所有用户路由都需要认证
+router.use(verifyToken);
 
-// 获取所有用户 (仅管理员和部门经理)
-router.get('/', verifyToken, checkRole(['admin', 'manager']), userController.getAllUsers);
+// 获取所有用户 - 仅限管理员
+router.get('/', checkRole(['admin']), userController.getAllUsers);
 
-// 根据ID获取单个用户
-router.get('/:id', verifyToken, userController.getUserById);
+// 获取用户详情 - 用户可访问自己的信息，管理员可访问所有用户信息
+router.get('/:id', userController.getUserById);
 
-// 创建新用户 (仅管理员和部门经理)
-router.post('/', verifyToken, checkRole(['admin', 'manager']), userController.createUser);
+// 创建用户 - 仅限管理员
+router.post('/', 
+  checkRole(['admin']), 
+  userValidators.create, 
+  validate, 
+  userController.createUser
+);
 
-// 更新用户 (仅管理员和部门经理，或用户自己)
-router.put('/:id', verifyToken, userController.updateUser);
+// 更新用户 - 用户可更新自己的信息，管理员可更新所有用户信息
+router.put('/:id', 
+  userValidators.update, 
+  validate, 
+  userController.updateUser
+);
 
-// 删除用户 (仅管理员)
-router.delete('/:id', verifyToken, checkRole(['admin']), userController.deleteUser);
+// 删除用户 - 仅限管理员
+router.delete('/:id', checkRole(['admin']), userController.deleteUser);
 
-// 获取用户角色
-router.get('/:id/roles', verifyToken, userController.getUserRoles);
+// 获取用户角色 - 仅限管理员和用户本人
+router.get('/:id/roles', userController.getUserRoles);
 
-// 更新用户角色 (仅管理员)
-router.put('/:id/roles', verifyToken, checkRole(['admin']), userController.updateUserRoles);
+// 更新用户角色 - 仅限管理员
+router.put('/:id/roles', 
+  checkRole(['admin']), 
+  userController.updateUserRoles
+);
 
-// 重置用户密码 (仅管理员)
-router.post('/:id/reset-password', verifyToken, checkRole(['admin']), userController.resetPassword);
+// 重置用户密码 - 仅限管理员
+router.post('/:id/reset-password', 
+  checkRole(['admin']), 
+  userValidators.resetPassword, 
+  validate, 
+  userController.resetPassword
+);
 
 module.exports = router; 

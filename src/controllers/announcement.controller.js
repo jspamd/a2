@@ -1,326 +1,575 @@
-const { Announcement, AnnouncementRead } = require('../models');
-const { Sequelize, Op } = require('sequelize');
+const {
+  Announcement,
+  AnnouncementTarget,
+  AnnouncementRead,
+  User,
+  Department,
+  Role
+} = require('../models');
+const { Op } = require('sequelize');
+const { AppError } = require('../middleware/errorHandler');
+const moment = require('moment');
 
 /**
- * 获取所有公告
+ * 发布公告
  */
-exports.getAllAnnouncements = async (req, res) => {
+exports.createAnnouncement = async (req, res, next) => {
   try {
-    const userId = req.userId;
+    const publisherId = req.user.id;
+    const {
+      title,
+      content,
+      type,
+      importance,
+      attachments,
+      publishTo,
+      expireDate
+    } = req.body;
     
-    // 分页参数
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const offset = (page - 1) * limit;
-
-    // 筛选参数
-    const { type, search } = req.query;
-
-    // 构建查询条件
-    const whereCondition = {};
-    
-    if (type) {
-      whereCondition.type = type;
+    // 验证必填字段
+    if (!title || !content || !type || !importance || !publishTo) {
+      return next(new AppError('标题、内容、类型、重要性和发布对象为必填项', 400));
     }
     
-    if (search) {
-      whereCondition[Op.or] = [
-        { title: { [Op.like]: `%${search}%` } },
-        { content: { [Op.like]: `%${search}%` } }
-      ];
+    // 验证公告类型
+    const validTypes = ['notice', 'news', 'activity', 'policy', 'other'];
+    if (!validTypes.includes(type)) {
+      return next(new AppError('无效的公告类型', 400));
     }
-
-    // 查询公告列表
-    const { count, rows } = await Announcement.findAndCountAll({
-      where: whereCondition,
-      limit,
-      offset,
-      order: [['isPinned', 'DESC'], ['createdAt', 'DESC']],
-      include: [
-        {
-          model: AnnouncementRead,
-          as: 'readRecords',
-          required: false,
-          where: { userId },
-          attributes: ['id', 'readAt']
-        }
-      ]
-    });
-
-    // 计算总页数
-    const totalPages = Math.ceil(count / limit);
-
-    // 处理已读状态
-    const announcementsWithReadStatus = rows.map(announcement => {
-      const plainAnnouncement = announcement.get({ plain: true });
-      plainAnnouncement.isRead = plainAnnouncement.readRecords && plainAnnouncement.readRecords.length > 0;
-      delete plainAnnouncement.readRecords;
-      return plainAnnouncement;
-    });
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        announcements: announcementsWithReadStatus,
-        pagination: {
-          total: count,
-          page,
-          limit,
-          totalPages
-        }
+    
+    // 验证重要性
+    const validImportance = ['high', 'medium', 'low'];
+    if (!validImportance.includes(importance)) {
+      return next(new AppError('无效的重要性级别', 400));
+    }
+    
+    // 验证发布对象
+    if (!Array.isArray(publishTo) || publishTo.length === 0) {
+      return next(new AppError('发布对象必须是一个非空数组', 400));
+    }
+    
+    // 发布对象验证
+    for (const target of publishTo) {
+      if (!target.type || !['all', 'department', 'role', 'user'].includes(target.type)) {
+        return next(new AppError('发布对象类型无效', 400));
       }
-    });
-  } catch (error) {
-    console.error('获取公告列表错误:', error);
-    res.status(500).json({
-      status: 'error',
-      message: '获取公告列表过程中发生错误',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-/**
- * 获取单个公告
- */
-exports.getAnnouncement = async (req, res) => {
-  try {
-    const announcementId = req.params.id;
-    const userId = req.userId;
-
-    // 查询公告
-    const announcement = await Announcement.findByPk(announcementId, {
-      include: [
-        {
-          model: AnnouncementRead,
-          as: 'readRecords',
-          required: false,
-          where: { userId },
-          attributes: ['id', 'readAt']
-        }
-      ]
-    });
-
-    if (!announcement) {
-      return res.status(404).json({
-        status: 'error',
-        message: '公告不存在'
-      });
+      
+      if (target.type !== 'all' && !target.id) {
+        return next(new AppError(`发布对象类型为${target.type}时，必须指定ID`, 400));
+      }
     }
-
-    // 处理已读状态
-    const plainAnnouncement = announcement.get({ plain: true });
-    plainAnnouncement.isRead = plainAnnouncement.readRecords && plainAnnouncement.readRecords.length > 0;
-    delete plainAnnouncement.readRecords;
-
-    // 自动标记为已读
-    if (!plainAnnouncement.isRead) {
-      await AnnouncementRead.create({
-        announcementId,
-        userId,
-        readAt: new Date()
-      });
-      plainAnnouncement.isRead = true;
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: plainAnnouncement
-    });
-  } catch (error) {
-    console.error('获取公告错误:', error);
-    res.status(500).json({
-      status: 'error',
-      message: '获取公告信息过程中发生错误',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-/**
- * 创建公告
- */
-exports.createAnnouncement = async (req, res) => {
-  try {
-    const { title, content, type, department, isPinned, attachments } = req.body;
-    const userId = req.userId;
-
-    // 检查权限
-    if (req.user.role !== 'admin' && req.user.role !== 'manager') {
-      return res.status(403).json({
-        status: 'error',
-        message: '权限不足，无法创建公告'
-      });
-    }
-
+    
     // 创建公告
     const announcement = await Announcement.create({
       title,
       content,
       type,
-      department,
-      isPinned: !!isPinned,
-      attachments,
-      createdBy: userId
+      importance,
+      attachments: attachments || null,
+      publisherId,
+      publishTime: new Date(),
+      expireDate: expireDate ? new Date(expireDate) : null,
+      status: 'published'
     });
-
+    
+    // 创建公告发布对象记录
+    const targetRecords = [];
+    for (const target of publishTo) {
+      targetRecords.push({
+        announcementId: announcement.id,
+        targetType: target.type,
+        targetId: target.type === 'all' ? null : target.id
+      });
+    }
+    
+    await AnnouncementTarget.bulkCreate(targetRecords);
+    
+    // 返回创建的公告，包括发布对象
+    const result = await Announcement.findByPk(announcement.id, {
+      include: [
+        { model: User, as: 'publisher', attributes: ['id', 'username', 'name'] },
+        { model: AnnouncementTarget, as: 'targets' }
+      ]
+    });
+    
     res.status(201).json({
       status: 'success',
-      message: '公告创建成功',
-      data: announcement
+      message: '公告发布成功',
+      data: result
     });
   } catch (error) {
-    console.error('创建公告错误:', error);
-    res.status(500).json({
-      status: 'error',
-      message: '创建公告过程中发生错误',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    next(error);
   }
 };
 
 /**
- * 更新公告
+ * 获取公告列表
  */
-exports.updateAnnouncement = async (req, res) => {
+exports.getAnnouncements = async (req, res, next) => {
   try {
-    const announcementId = req.params.id;
-    const { title, content, type, department, isPinned, attachments } = req.body;
-    const userId = req.userId;
-
-    // 检查权限
-    if (req.user.role !== 'admin' && req.user.role !== 'manager') {
-      return res.status(403).json({
-        status: 'error',
-        message: '权限不足，无法更新公告'
+    const userId = req.user.id;
+    const userDepartmentId = req.user.departmentId;
+    
+    // 查询参数
+    const type = req.query.type;
+    const importance = req.query.importance;
+    const status = req.query.status;
+    const onlyUnread = req.query.onlyUnread === 'true';
+    const search = req.query.search || '';
+    
+    // 分页参数
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    
+    // 获取用户角色ID
+    const userRoleIds = await Role.findAll({
+      attributes: ['id'],
+      include: [{
+        model: User,
+        where: { id: userId }
+      }]
+    }).map(role => role.id);
+    
+    // 构建公告查询条件
+    const announcementWhere = {};
+    
+    if (type) {
+      announcementWhere.type = type;
+    }
+    
+    if (importance) {
+      announcementWhere.importance = importance;
+    }
+    
+    if (status) {
+      announcementWhere.status = status;
+    } else {
+      // 默认只查询已发布的公告
+      announcementWhere.status = 'published';
+    }
+    
+    if (search) {
+      announcementWhere[Op.or] = [
+        { title: { [Op.like]: `%${search}%` } },
+        { content: { [Op.like]: `%${search}%` } }
+      ];
+    }
+    
+    // 构建发布对象查询条件
+    const targetWhere = {
+      [Op.or]: [
+        { targetType: 'all' },
+        { targetType: 'user', targetId: userId },
+        { targetType: 'department', targetId: userDepartmentId }
+      ]
+    };
+    
+    // 添加角色条件
+    if (userRoleIds.length > 0) {
+      targetWhere[Op.or].push({
+        targetType: 'role',
+        targetId: {
+          [Op.in]: userRoleIds
+        }
       });
     }
-
-    // 查询公告
-    const announcement = await Announcement.findByPk(announcementId);
-    if (!announcement) {
-      return res.status(404).json({
-        status: 'error',
-        message: '公告不存在'
-      });
-    }
-
-    // 更新公告
-    await announcement.update({
-      title,
-      content,
-      type,
-      department,
-      isPinned: isPinned !== undefined ? !!isPinned : announcement.isPinned,
-      attachments,
-      updatedBy: userId
+    
+    // 获取公告
+    const { count, rows } = await Announcement.findAndCountAll({
+      where: announcementWhere,
+      include: [
+        { 
+          model: User, 
+          as: 'publisher', 
+          attributes: ['id', 'username', 'name'] 
+        },
+        {
+          model: AnnouncementTarget,
+          as: 'targets',
+          where: targetWhere,
+          required: true
+        }
+      ],
+      distinct: true,
+      order: [
+        ['importance', 'DESC'],
+        ['publishTime', 'DESC']
+      ],
+      limit,
+      offset
     });
-
+    
+    // 获取已读状态
+    const announcementIds = rows.map(announcement => announcement.id);
+    const readRecords = await AnnouncementRead.findAll({
+      where: {
+        userId,
+        announcementId: {
+          [Op.in]: announcementIds
+        }
+      }
+    });
+    
+    const readAnnouncementIds = new Set(readRecords.map(record => record.announcementId));
+    
+    // 如果只查询未读公告，过滤掉已读公告
+    let filteredRows = rows;
+    if (onlyUnread) {
+      filteredRows = rows.filter(announcement => !readAnnouncementIds.has(announcement.id));
+    }
+    
+    // 添加已读状态到公告数据
+    const announcementsWithReadStatus = filteredRows.map(announcement => {
+      const isRead = readAnnouncementIds.has(announcement.id);
+      return {
+        ...announcement.toJSON(),
+        isRead
+      };
+    });
+    
+    // 计算总页数
+    const totalPages = Math.ceil(count / limit);
+    
+    // 获取未读公告数量
+    const unreadCount = await Announcement.count({
+      where: {
+        status: 'published',
+        id: {
+          [Op.notIn]: Array.from(readAnnouncementIds)
+        }
+      },
+      include: [
+        {
+          model: AnnouncementTarget,
+          as: 'targets',
+          where: targetWhere,
+          required: true
+        }
+      ],
+      distinct: true
+    });
+    
     res.status(200).json({
       status: 'success',
-      message: '公告更新成功',
-      data: announcement
+      message: '获取公告列表成功',
+      data: announcementsWithReadStatus,
+      unreadCount,
+      pagination: {
+        total: count,
+        page,
+        limit,
+        totalPages
+      }
     });
   } catch (error) {
-    console.error('更新公告错误:', error);
-    res.status(500).json({
-      status: 'error',
-      message: '更新公告过程中发生错误',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    next(error);
   }
 };
 
 /**
- * 删除公告
+ * 获取公告详情
  */
-exports.deleteAnnouncement = async (req, res) => {
+exports.getAnnouncementById = async (req, res, next) => {
   try {
     const announcementId = req.params.id;
-
-    // 检查权限
-    if (req.user.role !== 'admin' && req.user.role !== 'manager') {
-      return res.status(403).json({
-        status: 'error',
-        message: '权限不足，无法删除公告'
-      });
-    }
-
-    // 查询公告
-    const announcement = await Announcement.findByPk(announcementId);
+    const userId = req.user.id;
+    const userDepartmentId = req.user.departmentId;
+    
+    // 获取用户角色ID
+    const userRoleIds = await Role.findAll({
+      attributes: ['id'],
+      include: [{
+        model: User,
+        where: { id: userId }
+      }]
+    }).map(role => role.id);
+    
+    // 获取公告
+    const announcement = await Announcement.findByPk(announcementId, {
+      include: [
+        { 
+          model: User, 
+          as: 'publisher', 
+          attributes: ['id', 'username', 'name'] 
+        },
+        {
+          model: AnnouncementTarget,
+          as: 'targets'
+        }
+      ]
+    });
+    
     if (!announcement) {
-      return res.status(404).json({
-        status: 'error',
-        message: '公告不存在'
+      return next(new AppError('公告不存在', 404));
+    }
+    
+    // 检查权限
+    const userRoles = req.user.roles || [];
+    const isAdmin = userRoles.includes('admin');
+    const isPublisher = announcement.publisherId === userId;
+    
+    if (!isAdmin && !isPublisher) {
+      // 检查是否是该公告的目标用户
+      const targets = announcement.targets;
+      const hasAccess = targets.some(target => {
+        if (target.targetType === 'all') return true;
+        if (target.targetType === 'user' && target.targetId === userId) return true;
+        if (target.targetType === 'department' && target.targetId === userDepartmentId) return true;
+        if (target.targetType === 'role' && userRoleIds.includes(target.targetId)) return true;
+        return false;
+      });
+      
+      if (!hasAccess) {
+        return next(new AppError('您没有权限查看此公告', 403));
+      }
+    }
+    
+    // 查询公告阅读记录
+    let readRecord = await AnnouncementRead.findOne({
+      where: {
+        announcementId,
+        userId
+      }
+    });
+    
+    // 如果没有阅读记录，创建一个
+    if (!readRecord) {
+      readRecord = await AnnouncementRead.create({
+        announcementId,
+        userId,
+        readTime: new Date()
       });
     }
-
-    // 删除公告
-    await announcement.destroy();
-
+    
+    // 获取读者统计
+    const readCount = await AnnouncementRead.count({
+      where: { announcementId }
+    });
+    
+    // 获取目标用户数量
+    const targets = announcement.targets;
+    let targetCount = 0;
+    
+    for (const target of targets) {
+      if (target.targetType === 'all') {
+        // 所有用户
+        targetCount = await User.count({ where: { status: 'active' } });
+        break;
+      } else if (target.targetType === 'department') {
+        // 部门用户
+        targetCount += await User.count({
+          where: {
+            departmentId: target.targetId,
+            status: 'active'
+          }
+        });
+      } else if (target.targetType === 'role') {
+        // 角色用户
+        const roleUsers = await User.count({
+          include: [{
+            model: Role,
+            where: { id: target.targetId }
+          }],
+          where: { status: 'active' }
+        });
+        targetCount += roleUsers;
+      } else if (target.targetType === 'user') {
+        // 单个用户
+        targetCount += 1;
+      }
+    }
+    
+    // 添加阅读统计
+    const announcementWithStats = {
+      ...announcement.toJSON(),
+      readCount,
+      targetCount,
+      readRate: targetCount > 0 ? Math.round((readCount / targetCount) * 100) : 0
+    };
+    
     res.status(200).json({
       status: 'success',
-      message: '公告删除成功'
+      message: '获取公告详情成功',
+      data: announcementWithStats
     });
   } catch (error) {
-    console.error('删除公告错误:', error);
-    res.status(500).json({
-      status: 'error',
-      message: '删除公告过程中发生错误',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    next(error);
   }
 };
 
 /**
  * 标记公告为已读
  */
-exports.markAsRead = async (req, res) => {
+exports.markAnnouncementAsRead = async (req, res, next) => {
   try {
     const announcementId = req.params.id;
-    const userId = req.userId;
-
-    // 查询公告
+    const userId = req.user.id;
+    
+    // 检查公告是否存在
     const announcement = await Announcement.findByPk(announcementId);
+    
     if (!announcement) {
-      return res.status(404).json({
-        status: 'error',
-        message: '公告不存在'
-      });
+      return next(new AppError('公告不存在', 404));
     }
-
-    // 检查是否已经标记为已读
-    const existingRecord = await AnnouncementRead.findOne({
+    
+    // 查找或创建阅读记录
+    const [readRecord, created] = await AnnouncementRead.findOrCreate({
       where: {
         announcementId,
         userId
+      },
+      defaults: {
+        readTime: new Date()
       }
     });
-
-    if (existingRecord) {
-      return res.status(200).json({
-        status: 'success',
-        message: '公告已经标记为已读'
-      });
-    }
-
-    // 创建已读记录
-    await AnnouncementRead.create({
-      announcementId,
-      userId,
-      readAt: new Date()
-    });
-
+    
     res.status(200).json({
       status: 'success',
-      message: '公告已标记为已读'
+      message: created ? '公告已标记为已读' : '公告已经是已读状态',
+      data: readRecord
     });
   } catch (error) {
-    console.error('标记公告已读错误:', error);
-    res.status(500).json({
-      status: 'error',
-      message: '标记公告已读过程中发生错误',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    next(error);
+  }
+};
+
+/**
+ * 更新公告
+ */
+exports.updateAnnouncement = async (req, res, next) => {
+  try {
+    const announcementId = req.params.id;
+    const userId = req.user.id;
+    const {
+      title,
+      content,
+      type,
+      importance,
+      attachments,
+      publishTo,
+      expireDate,
+      status
+    } = req.body;
+    
+    // 查找公告
+    const announcement = await Announcement.findByPk(announcementId);
+    
+    if (!announcement) {
+      return next(new AppError('公告不存在', 404));
+    }
+    
+    // 检查权限
+    const userRoles = req.user.roles || [];
+    const isAdmin = userRoles.includes('admin');
+    
+    if (!isAdmin && announcement.publisherId !== userId) {
+      return next(new AppError('您没有权限更新此公告', 403));
+    }
+    
+    // 验证状态
+    if (status && !['draft', 'published', 'archived'].includes(status)) {
+      return next(new AppError('无效的公告状态', 400));
+    }
+    
+    // 验证类型
+    if (type && !['notice', 'news', 'activity', 'policy', 'other'].includes(type)) {
+      return next(new AppError('无效的公告类型', 400));
+    }
+    
+    // 验证重要性
+    if (importance && !['high', 'medium', 'low'].includes(importance)) {
+      return next(new AppError('无效的重要性级别', 400));
+    }
+    
+    // 更新公告
+    await announcement.update({
+      title: title || announcement.title,
+      content: content || announcement.content,
+      type: type || announcement.type,
+      importance: importance || announcement.importance,
+      attachments: attachments !== undefined ? attachments : announcement.attachments,
+      expireDate: expireDate ? new Date(expireDate) : announcement.expireDate,
+      status: status || announcement.status,
+      updatedAt: new Date()
     });
+    
+    // 如果更新了发布对象
+    if (publishTo && Array.isArray(publishTo) && publishTo.length > 0) {
+      // 删除旧的发布对象
+      await AnnouncementTarget.destroy({
+        where: { announcementId }
+      });
+      
+      // 创建新的发布对象
+      const targetRecords = publishTo.map(target => ({
+        announcementId,
+        targetType: target.type,
+        targetId: target.type === 'all' ? null : target.id
+      }));
+      
+      await AnnouncementTarget.bulkCreate(targetRecords);
+    }
+    
+    // 获取更新后的公告
+    const updatedAnnouncement = await Announcement.findByPk(announcementId, {
+      include: [
+        { model: User, as: 'publisher', attributes: ['id', 'username', 'name'] },
+        { model: AnnouncementTarget, as: 'targets' }
+      ]
+    });
+    
+    res.status(200).json({
+      status: 'success',
+      message: '公告更新成功',
+      data: updatedAnnouncement
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * 删除公告
+ */
+exports.deleteAnnouncement = async (req, res, next) => {
+  try {
+    const announcementId = req.params.id;
+    const userId = req.user.id;
+    
+    // 查找公告
+    const announcement = await Announcement.findByPk(announcementId);
+    
+    if (!announcement) {
+      return next(new AppError('公告不存在', 404));
+    }
+    
+    // 检查权限
+    const userRoles = req.user.roles || [];
+    const isAdmin = userRoles.includes('admin');
+    
+    if (!isAdmin && announcement.publisherId !== userId) {
+      return next(new AppError('您没有权限删除此公告', 403));
+    }
+    
+    // 删除公告的发布对象
+    await AnnouncementTarget.destroy({
+      where: { announcementId }
+    });
+    
+    // 删除公告的阅读记录
+    await AnnouncementRead.destroy({
+      where: { announcementId }
+    });
+    
+    // 删除公告
+    await announcement.destroy();
+    
+    res.status(200).json({
+      status: 'success',
+      message: '公告删除成功'
+    });
+  } catch (error) {
+    next(error);
   }
 }; 

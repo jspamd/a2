@@ -1,24 +1,27 @@
 const express = require('express');
 const router = express.Router();
 const announcementController = require('../controllers/announcement.controller');
-const authMiddleware = require('../middlewares/auth.middleware');
+const { verifyToken, checkRole } = require('../middleware/auth');
 
-// 获取所有公告
-router.get('/', authMiddleware.verifyToken, announcementController.getAllAnnouncements);
+// 所有公告路由都需要认证
+router.use(verifyToken);
 
-// 获取单个公告
-router.get('/:id', authMiddleware.verifyToken, announcementController.getAnnouncement);
+// 获取公告列表 - 所有用户可访问
+router.get('/', announcementController.getAnnouncements);
 
-// 创建公告(管理员)
-router.post('/', authMiddleware.verifyToken, authMiddleware.isAdmin, announcementController.createAnnouncement);
+// 获取公告详情 - 所有用户可访问
+router.get('/:id', announcementController.getAnnouncementById);
 
-// 更新公告(管理员)
-router.put('/:id', authMiddleware.verifyToken, authMiddleware.isAdmin, announcementController.updateAnnouncement);
+// 标记公告已读 - 所有用户可访问
+router.post('/:id/read', announcementController.markAnnouncementAsRead);
 
-// 删除公告(管理员)
-router.delete('/:id', authMiddleware.verifyToken, authMiddleware.isAdmin, announcementController.deleteAnnouncement);
+// 创建公告 - 仅限管理员、部门经理
+router.post('/', checkRole(['admin', 'manager']), announcementController.createAnnouncement);
 
-// 标记公告为已读
-router.post('/:id/read', authMiddleware.verifyToken, announcementController.markAsRead);
+// 更新公告 - 仅限管理员、部门经理、公告创建者
+router.put('/:id', checkRole(['admin', 'manager']), announcementController.updateAnnouncement);
+
+// 删除公告 - 仅限管理员
+router.delete('/:id', checkRole(['admin']), announcementController.deleteAnnouncement);
 
 module.exports = router; 

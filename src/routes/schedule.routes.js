@@ -1,30 +1,27 @@
 const express = require('express');
 const router = express.Router();
 const scheduleController = require('../controllers/schedule.controller');
-const authMiddleware = require('../middlewares/auth.middleware');
+const { verifyToken, checkRole } = require('../middleware/auth');
 
-// 获取所有日程
-router.get('/', authMiddleware.verifyToken, scheduleController.getAllSchedules);
+// 所有日程路由都需要认证
+router.use(verifyToken);
 
-// 获取个人日程
-router.get('/my', authMiddleware.verifyToken, scheduleController.getMySchedules);
+// 获取日程列表 - 所有用户可访问
+router.get('/', scheduleController.getSchedules);
 
-// 获取单个日程
-router.get('/:id', authMiddleware.verifyToken, scheduleController.getSchedule);
+// 获取日程详情 - 所有用户可访问
+router.get('/:id', scheduleController.getScheduleById);
 
-// 创建日程
-router.post('/', authMiddleware.verifyToken, scheduleController.createSchedule);
+// 创建日程 - 所有用户可访问
+router.post('/', scheduleController.createSchedule);
 
-// 更新日程
-router.put('/:id', authMiddleware.verifyToken, scheduleController.updateSchedule);
+// 更新日程参与状态 - 所有用户可访问
+router.post('/:id/status', scheduleController.updateParticipantStatus);
 
-// 删除日程
-router.delete('/:id', authMiddleware.verifyToken, scheduleController.deleteSchedule);
+// 更新日程 - 需要是创建者或管理员
+router.put('/:id', scheduleController.updateSchedule);
 
-// 添加日程参与者
-router.post('/:id/participants', authMiddleware.verifyToken, scheduleController.addParticipants);
-
-// 设置提醒
-router.post('/:id/reminder', authMiddleware.verifyToken, scheduleController.setReminder);
+// 删除日程 - 需要是创建者或管理员
+router.delete('/:id', scheduleController.deleteSchedule);
 
 module.exports = router; 
