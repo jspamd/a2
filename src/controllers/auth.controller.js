@@ -1,15 +1,43 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { Sequelize } = require('sequelize');
-const { User, Role } = require('../models');
-const { Department } = require('../models');
+const getModels = require('../models');
+const { logger } = require('../utils/logger');
+
+let models;
+let User, Role, Department;
+
+// 初始化模型
+const initializeModels = async () => {
+  try {
+    logger.info('正在初始化认证控制器模型...');
+    models = await getModels();
+    User = models.User;
+    Role = models.Role;
+    Department = models.Department;
+    logger.info('认证控制器模型初始化完成');
+  } catch (error) {
+    logger.error('初始化认证控制器模型失败:', error);
+    throw error;
+  }
+};
+
+// 确保模型已初始化
+const ensureModelsInitialized = async () => {
+  if (!models) {
+    await initializeModels();
+  }
+};
 
 /**
  * 用户注册
  */
 exports.register = async (req, res) => {
   try {
+    await ensureModelsInitialized();
     const { username, email, password, fullName, department } = req.body;
+
+    logger.info('开始用户注册流程:', { username, email });
 
     // 检查用户名或邮箱是否已存在
     const existingUser = await User.findOne({
@@ -19,6 +47,7 @@ exports.register = async (req, res) => {
     });
 
     if (existingUser) {
+      logger.warn('用户名或邮箱已被使用:', { username, email });
       return res.status(400).json({
         status: 'error',
         message: '用户名或邮箱已被使用'
@@ -39,6 +68,8 @@ exports.register = async (req, res) => {
       status: 'active'
     });
 
+    logger.info('用户注册成功:', { userId: newUser.id, username });
+
     // 返回响应，不包含密码
     res.status(201).json({
       status: 'success',
@@ -53,7 +84,7 @@ exports.register = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('用户注册错误:', error);
+    logger.error('用户注册错误:', error);
     res.status(500).json({
       status: 'error',
       message: '用户注册过程中发生错误',
@@ -66,83 +97,124 @@ exports.register = async (req, res) => {
  * 用户登录
  */
 exports.login = async (req, res) => {
+  const { username, password } = req.body;
+  logger.info('收到登录请求:', { username });
+
   try {
-    const { username, password } = req.body;
+    logger.info('正在初始化模型...');
+    await ensureModelsInitialized();
+    logger.info('模型初始化完成');
 
     // 查找用户
-    const user = await User.findOne({
-      where: {
-        [Sequelize.Op.or]: [
-          { username },
-          { email: username } // 允许使用邮箱登录
-        ]
-      }
+    logger.info('正在查找用户...');
+    const user = await User.findOne({ 
+      where: { username },
+      include: [{
+        model: Role,
+        as: 'role'
+      }]
     });
-
+    
     if (!user) {
+      logger.warn('用户不存在:', username);
       return res.status(401).json({
         status: 'error',
-        message: '用户名或密码不正确'
+        message: '用户名或密码错误'
       });
     }
 
+    logger.info('找到用户:', {
+      id: user.id,
+      username: user.username,
+      status: user.status,
+      role: user.role ? user.role.code : null
+    });
+
     // 检查用户状态
+    logger.info('正在检查用户状态...');
     if (user.status !== 'active') {
-      return res.status(403).json({
+      logger.warn('用户账号已禁用:', username);
+      return res.status(401).json({
         status: 'error',
-        message: '账户已被禁用，请联系管理员'
+        message: '账号已被禁用'
       });
     }
 
     // 验证密码
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
+    logger.info('正在验证密码...');
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    
+    if (!isValidPassword) {
+      logger.warn('密码验证失败:', username);
       return res.status(401).json({
         status: 'error',
-        message: '用户名或密码不正确'
+        message: '用户名或密码错误'
       });
     }
 
-    // 生成访问令牌
-    const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role },
+    logger.info('密码验证成功');
+
+    // 检查JWT密钥是否存在
+    if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
+      logger.error('JWT密钥未配置');
+      return res.status(500).json({
+        status: 'error',
+        message: '服务器配置错误'
+      });
+    }
+
+    // 生成令牌
+    logger.info('正在生成访问令牌...');
+    const accessToken = jwt.sign(
+      { 
+        id: user.id, 
+        username: user.username,
+        role: user.role ? user.role.code : null
+      },
       process.env.JWT_SECRET,
-      { expiresIn: '24h' }
+      { expiresIn: process.env.JWT_EXPIRES_IN || '1d' }
     );
 
     // 生成刷新令牌
+    logger.info('正在生成刷新令牌...');
     const refreshToken = jwt.sign(
-      { id: user.id },
+      { 
+        id: user.id, 
+        username: user.username,
+        role: user.role ? user.role.code : null
+      },
       process.env.JWT_REFRESH_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
     );
 
-    // 更新用户最后登录时间
-    await user.update({
-      lastLogin: new Date()
-    });
+    // 更新最后登录时间
+    logger.info('正在更新最后登录时间...');
+    await user.update({ lastLoginAt: new Date() });
 
-    res.status(200).json({
+    logger.info('登录成功:', username);
+    return res.json({
       status: 'success',
       message: '登录成功',
       data: {
-        accessToken: token,
-        refreshToken: refreshToken,
+        accessToken,
+        refreshToken,
         user: {
           id: user.id,
           username: user.username,
           email: user.email,
-          fullName: user.fullName,
-          role: user.role,
-          department: user.department
+          name: user.name,
+          avatar: user.avatar,
+          status: user.status,
+          role: user.role ? user.role.code : null,
+          lastLoginAt: user.lastLoginAt
         }
       }
     });
   } catch (error) {
-    console.error('用户登录错误:', error);
-    res.status(500).json({
+    logger.error('登录过程中发生错误:', error);
+    return res.status(500).json({
       status: 'error',
-      message: '登录过程中发生错误',
+      message: '服务器内部错误',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

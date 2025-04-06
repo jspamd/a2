@@ -24,7 +24,13 @@ const testLogin = async () => {
       password: 'admin123'
     });
     
-    token = response.data.data.token;
+    // 检查登录响应结构
+    console.log('登录响应:', JSON.stringify(response.data));
+    
+    // 修改token获取逻辑，根据实际API响应结构
+    token = response.data.data.accessToken; // 可能是accessToken而不是token
+    // 或者
+    // token = response.data.token;
     userId = response.data.data.user.id;
     
     console.log('登录成功，获取到token:', token.substring(0, 15) + '...');

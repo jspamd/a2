@@ -43,7 +43,7 @@ const testLogin = async () => {
     const response = await axios.post(`${API_BASE_URL}/auth/login`, credentials);
     
     if (response.data.status === 'success') {
-      token = response.data.data.token;
+      token = response.data.data.accessToken;
       userId = response.data.data.user.id;
       
       console.log('登录成功，获取到token:', token.substring(0, 15) + '...');
@@ -77,16 +77,16 @@ const testCreateFolder = async () => {
     
     const folderData = {
       title: '测试文件夹',
-      isFolder: true,
-      type: 'folder',
-      parentId: null,
-      description: '这是一个测试文件夹'
+      description: '这是一个测试文件夹',
+      isPublic: true
     };
     
     const response = await axios.post(
-      `${API_BASE_URL}/documents`,
+      `${API_BASE_URL}/documents/folders`,
       folderData,
-      { headers: getHeaders() }
+      {
+        headers: getHeaders()
+      }
     );
     
     folderId = response.data.data.id;
@@ -110,19 +110,34 @@ const testCreateHtmlDocument = async () => {
   try {
     console.log('\n测试创建HTML文档...');
     
-    const docData = {
-      title: 'HTML测试文档',
-      content: '<h1>测试标题</h1><p>这是一个<strong>HTML</strong>测试文档</p>',
-      parentId: folderId,
-      description: '这是一个HTML格式的测试文档',
-      isPublic: true
-    };
+    // 创建HTML文件
+    const htmlContent = '<h1>测试标题</h1><p>这是一个<strong>HTML</strong>测试文档</p>';
+    const htmlFile = path.join(__dirname, 'test.html');
+    fs.writeFileSync(htmlFile, htmlContent);
+    
+    const form = new FormData();
+    form.append('title', 'HTML测试文档');
+    form.append('description', '这是一个HTML格式的测试文档');
+    form.append('type', 'html');
+    form.append('isPublic', 'true');
+    if (folderId) {
+      form.append('parentId', folderId);
+    }
+    form.append('file', fs.createReadStream(htmlFile));
     
     const response = await axios.post(
       `${API_BASE_URL}/documents`,
-      docData,
-      { headers: getHeaders() }
+      form,
+      {
+        headers: {
+          ...getFormHeaders(),
+          ...form.getHeaders()
+        }
+      }
     );
+    
+    // 清理临时文件
+    fs.unlinkSync(htmlFile);
     
     documentId = response.data.data.id;
     console.log('HTML文档创建成功，ID:', documentId);
@@ -136,6 +151,17 @@ const testCreateHtmlDocument = async () => {
     } else {
       console.error('错误:', error.message);
     }
+    
+    // 清理临时文件
+    try {
+      const htmlFile = path.join(__dirname, 'test.html');
+      if (fs.existsSync(htmlFile)) {
+        fs.unlinkSync(htmlFile);
+      }
+    } catch (e) {
+      console.error('清理临时文件失败:', e.message);
+    }
+    
     return false;
   }
 };
@@ -152,6 +178,7 @@ const testUploadFileDocument = async () => {
     const form = new FormData();
     form.append('title', '上传的文本文件');
     form.append('description', '这是一个上传的测试文本文件');
+    form.append('type', 'file');
     form.append('parentId', folderId);
     form.append('isPublic', 'true');
     form.append('file', fs.createReadStream(testFilePath));
@@ -524,14 +551,14 @@ const runAllTests = async () => {
   console.log('API地址:', API_BASE_URL);
   
   // 检查服务器可用性
-  try {
-    await axios.get(API_BASE_URL);
-    console.log('API服务器可用\n');
-  } catch (error) {
-    console.error('API服务器不可用，请确认服务器是否运行');
-    console.error('错误详情:', error.message);
-    return;
-  }
+  // try {
+  //   await axios.get(API_BASE_URL);
+  //   console.log('API服务器可用\n');
+  // } catch (error) {
+  //   console.error('API服务器不可用，请确认服务器是否运行');
+  //   console.error('错误详情:', error.message);
+  //   return;
+  // }
   
   // 登录
   if (!await testLogin()) {

@@ -1,6 +1,5 @@
 const bcrypt = require('bcrypt');
-const db = require('../models');
-const { User, Role, Permission, Department } = db;
+const getModels = require('../models');
 
 /**
  * 初始化系统基础数据
@@ -8,6 +7,9 @@ const { User, Role, Permission, Department } = db;
 const initializeSystemData = async () => {
   try {
     console.log('开始初始化系统基础数据...');
+    
+    // 获取模型
+    const { User, Role, Permission, Department } = await getModels();
     
     // 检查管理员角色是否存在
     let adminRole = await Role.findOne({ where: { code: 'admin' } });
@@ -108,11 +110,9 @@ const initializeSystemData = async () => {
         name: '系统管理员',
         email: 'admin@example.com',
         status: 'active',
-        departmentId: rootDepartment.id
+        departmentId: rootDepartment.id,
+        roleId: adminRole.id  // 直接设置roleId
       });
-      
-      // 将管理员与管理员角色关联
-      await adminUser.addRole(adminRole);
       
       console.log('管理员账号创建完成');
     }

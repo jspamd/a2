@@ -24,7 +24,7 @@ router.delete('/:id', checkRole(['admin']), workflowController.deleteWorkflowDef
 
 // 工作流实例相关路由
 // 启动工作流实例 - 所有用户可访问
-router.post('/:id/instances', workflowController.createWorkflowInstance);
+router.post('/instances', workflowController.createWorkflowInstance);
 
 // 获取工作流实例列表 - 所有用户可访问
 router.get('/instances', workflowController.getMyWorkflowInstances);

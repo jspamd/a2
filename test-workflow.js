@@ -23,19 +23,52 @@ const getHeaders = () => {
 const testLogin = async () => {
   try {
     console.log('测试登录...');
+    console.log('发送登录请求到:', `${API_BASE_URL}/auth/login`);
+    console.log('请求数据:', { username: 'admin', password: 'admin123' });
+    
     const response = await axios.post(`${API_BASE_URL}/auth/login`, {
       username: 'admin',
       password: 'admin123'
     });
     
-    token = response.data.data.token;
-    userId = response.data.data.user.id;
+    console.log('收到响应:', response.data);
     
-    console.log('登录成功，获取到token:', token.substring(0, 15) + '...');
-    console.log('用户ID:', userId);
-    return true;
+    if (response.data.status === 'success') {
+      token = response.data.data.accessToken;
+      userId = response.data.data.user.id;
+      
+      console.log('登录成功，获取到token:', token.substring(0, 15) + '...');
+      console.log('用户ID:', userId);
+      return true;
+    } else {
+      console.error('登录失败:', response.data.message);
+      return false;
+    }
   } catch (error) {
-    console.error('登录失败:', error.response?.data || error.message);
+    if (error.response) {
+      console.error('登录失败 - 服务器响应:', {
+        status: error.response.status,
+        data: error.response.data,
+        headers: error.response.headers
+      });
+    } else if (error.request) {
+      console.error('登录请求失败 - 无响应:', {
+        message: error.message,
+        code: error.code,
+        request: {
+          method: error.request.method,
+          path: error.request.path,
+          headers: error.request.headers
+        }
+      });
+      console.error('请确保服务器已启动并在端口3002上运行');
+    } else {
+      console.error('登录错误:', {
+        message: error.message,
+        stack: error.stack,
+        config: error.config
+      });
+    }
     return false;
   }
 };
@@ -44,133 +77,104 @@ const testLogin = async () => {
 const testCreateWorkflow = async () => {
   try {
     console.log('\n测试创建工作流定义...');
-    
-    // 创建一个请假审批工作流
-    const workflow = {
+    const workflowData = {
       name: '请假审批流程',
-      description: '员工请假需要经过部门主管和HR审批',
-      type: 'approval',
-      nodes: [
-        {
-          id: 'start',
-          type: 'start',
-          label: '开始',
-          position: { x: 100, y: 100 }
-        },
-        {
-          id: 'form',
-          type: 'task',
-          label: '填写请假单',
-          position: { x: 100, y: 200 },
-          properties: {
-            description: '请填写请假信息',
+      code: 'LEAVE_APPROVAL',
+      category: 'leave',
+      description: '员工请假审批流程',
+      nodeConfig: {
+        nodes: [
+          {
+            id: 'start',
+            type: 'start',
+            name: '开始'
+          },
+          {
+            id: 'fill_form',
+            type: 'approval',
+            name: '填写请假单',
             assigneeType: 'initiator'
+          },
+          {
+            id: 'manager_approval',
+            type: 'approval',
+            name: '经理审批',
+            assigneeType: 'role',
+            assigneeId: 'manager'
+          },
+          {
+            id: 'hr_approval',
+            type: 'approval',
+            name: 'HR审批',
+            assigneeType: 'role',
+            assigneeId: 'hr'
+          },
+          {
+            id: 'end',
+            type: 'end',
+            name: '结束'
           }
-        },
-        {
-          id: 'manager_approval',
-          type: 'approval',
-          label: '部门主管审批',
-          position: { x: 100, y: 300 },
-          approvers: [
-            { type: 'initiator_supervisor', id: null }
-          ],
-          properties: {
-            description: '请审批下属的请假申请',
-            deadline: 24 // 24小时内完成
+        ],
+        edges: [
+          {
+            source: 'start',
+            target: 'fill_form'
+          },
+          {
+            source: 'fill_form',
+            target: 'manager_approval'
+          },
+          {
+            source: 'manager_approval',
+            target: 'hr_approval'
+          },
+          {
+            source: 'hr_approval',
+            target: 'end'
           }
-        },
-        {
-          id: 'hr_approval',
-          type: 'approval',
-          label: 'HR审批',
-          position: { x: 100, y: 400 },
-          approvers: [
-            { type: 'role', id: 3 } // 假设HR角色ID为3
-          ],
-          properties: {
-            description: '请进行最终审批',
-            deadline: 48 // 48小时内完成
+        ]
+      },
+      formConfig: {
+        type: 'object',
+        properties: {
+          leaveType: {
+            type: 'string',
+            title: '请假类型',
+            enum: ['年假', '事假', '病假', '调休'],
+            required: true
+          },
+          startDate: {
+            type: 'string',
+            title: '开始日期',
+            format: 'date',
+            required: true
+          },
+          endDate: {
+            type: 'string',
+            title: '结束日期',
+            format: 'date',
+            required: true
+          },
+          reason: {
+            type: 'string',
+            title: '请假原因',
+            required: true
           }
-        },
-        {
-          id: 'end',
-          type: 'end',
-          label: '结束',
-          position: { x: 100, y: 500 }
         }
-      ],
-      edges: [
-        {
-          id: 'edge1',
-          source: 'start',
-          target: 'form'
-        },
-        {
-          id: 'edge2',
-          source: 'form',
-          target: 'manager_approval'
-        },
-        {
-          id: 'edge3',
-          source: 'manager_approval',
-          target: 'hr_approval'
-        },
-        {
-          id: 'edge4',
-          source: 'hr_approval',
-          target: 'end'
-        }
-      ],
-      formFields: [
-        {
-          key: 'leaveType',
-          label: '请假类型',
-          type: 'select',
-          options: ['年假', '病假', '事假', '婚假', '丧假', '产假', '其他'],
-          required: true
-        },
-        {
-          key: 'startDate',
-          label: '开始日期',
-          type: 'date',
-          required: true
-        },
-        {
-          key: 'endDate',
-          label: '结束日期',
-          type: 'date',
-          required: true
-        },
-        {
-          key: 'reason',
-          label: '请假原因',
-          type: 'textarea',
-          required: true
-        },
-        {
-          key: 'contactInfo',
-          label: '请假期间联系方式',
-          type: 'text',
-          required: false
-        }
-      ],
+      },
       status: 'active'
     };
-    
+
     const response = await axios.post(
       `${API_BASE_URL}/workflows`,
-      workflow,
-      { headers: getHeaders() }
+      workflowData,
+      { headers: { Authorization: `Bearer ${token}` } }
     );
-    
-    workflowId = response.data.data.workflow.id;
-    console.log('工作流创建成功，ID:', workflowId);
-    console.log('工作流名称:', response.data.data.workflow.name);
-    return true;
+
+    console.log('创建工作流定义成功:', response.data);
+    workflowId = response.data.data.id;
   } catch (error) {
-    console.error('创建工作流失败:', error.response?.data || error.message);
-    return false;
+    console.log('创建工作流失败:', error.response?.data || error.message);
   }
 };
 
@@ -206,15 +210,14 @@ const testGetWorkflowDetail = async () => {
     
     const response = await axios.get(
       `${API_BASE_URL}/workflows/${workflowId}`,
-      { headers: getHeaders() }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
     
     console.log('获取工作流定义详情成功:');
-    console.log('工作流名称:', response.data.data.workflow.name);
-    console.log('工作流类型:', response.data.data.workflow.type);
-    console.log('节点数量:', response.data.data.nodes.length);
-    console.log('连线数量:', response.data.data.edges.length);
-    console.log('实例统计:', response.data.data.stats);
+    console.log('工作流名称:', response.data.data.name);
+    console.log('工作流编码:', response.data.data.code);
+    console.log('工作流类别:', response.data.data.category);
+    console.log('工作流状态:', response.data.data.status);
     
     return true;
   } catch (error) {
@@ -227,37 +230,35 @@ const testGetWorkflowDetail = async () => {
 const testStartWorkflowInstance = async () => {
   try {
     console.log('\n测试启动工作流实例...');
-    
-    const now = moment();
-    const instance = {
-      title: '请假申请 - ' + now.format('YYYY-MM-DD'),
+    if (!workflowId) {
+      console.log('没有可用的工作流定义ID，跳过测试');
+      return;
+    }
+
+    const instanceData = {
+      workflowDefinitionId: workflowId,
+      title: '张三的年假申请',
       formData: {
         leaveType: '年假',
-        startDate: now.format('YYYY-MM-DD'),
-        endDate: now.add(2, 'days').format('YYYY-MM-DD'),
-        reason: '家庭事务',
-        contactInfo: '13800138000'
+        startDate: '2024-04-10',
+        endDate: '2024-04-12',
+        reason: '计划休年假3天'
       }
     };
-    
+
     const response = await axios.post(
-      `${API_BASE_URL}/workflows/${workflowId}/instances`,
-      instance,
-      { headers: getHeaders() }
+      `${API_BASE_URL}/workflows/instances`,
+      instanceData,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      }
     );
-    
-    instanceId = response.data.data.instance.id;
-    console.log('工作流实例启动成功，ID:', instanceId);
-    
-    // 获取第一个任务ID
-    if (response.data.data.task) {
-      taskId = response.data.data.task.id;
-      console.log('创建的第一个任务ID:', taskId);
-    }
-    
+
+    console.log('启动工作流实例成功:', response.data);
+    instanceId = response.data.data.id;
     return true;
   } catch (error) {
-    console.error('启动工作流实例失败:', error.response?.data || error.message);
+    console.log('启动工作流实例失败:', error.response?.data || error.message);
     return false;
   }
 };
@@ -269,14 +270,15 @@ const testGetWorkflowInstances = async () => {
     
     const response = await axios.get(
       `${API_BASE_URL}/workflows/instances`,
-      { headers: getHeaders() }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
     
-    console.log('获取工作流实例列表成功，总数:', response.data.data.length);
+    console.log('获取工作流实例列表成功，总数:', response.data.data.total);
+    console.log('当前页实例数:', response.data.data.rows.length);
     
     // 如果之前没有创建实例，使用第一个实例的ID
-    if (!instanceId && response.data.data.length > 0) {
-      instanceId = response.data.data[0].id;
+    if (!instanceId && response.data.data.rows.length > 0) {
+      instanceId = response.data.data.rows[0].id;
       console.log('使用已有实例，ID:', instanceId);
     }
     
@@ -291,24 +293,21 @@ const testGetWorkflowInstances = async () => {
 const testGetWorkflowInstanceDetail = async () => {
   try {
     console.log('\n测试获取工作流实例详情...');
+    if (!instanceId) {
+      console.log('没有可用的工作流实例ID，跳过测试');
+      return;
+    }
     
     const response = await axios.get(
       `${API_BASE_URL}/workflows/instances/${instanceId}`,
-      { headers: getHeaders() }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
     
     console.log('获取工作流实例详情成功:');
     console.log('实例标题:', response.data.data.title);
     console.log('实例状态:', response.data.data.status);
-    console.log('发起人:', response.data.data.initiator.name);
-    console.log('当前节点:', response.data.data.currentNodeId);
-    console.log('待处理任务数:', response.data.data.pendingTasks.length);
-    
-    // 如果有待处理任务，获取第一个任务ID
-    if (!taskId && response.data.data.pendingTasks.length > 0) {
-      taskId = response.data.data.pendingTasks[0].id;
-      console.log('获取到待处理任务ID:', taskId);
-    }
+    console.log('当前节点:', response.data.data.currentNode);
+    console.log('表单数据:', JSON.stringify(response.data.data.formData, null, 2));
     
     return true;
   } catch (error) {
@@ -324,15 +323,16 @@ const testGetMyTasks = async () => {
     
     const response = await axios.get(
       `${API_BASE_URL}/workflows/tasks/my`,
-      { headers: getHeaders() }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
     
-    console.log('获取待办任务列表成功，总数:', response.data.data.length);
-    console.log('逾期任务数量:', response.data.overdueCount);
+    console.log('获取待办任务列表成功:');
+    console.log('总任务数:', response.data.data.total);
+    console.log('当前页任务数:', response.data.data.rows.length);
     
     // 如果之前没有获取任务，使用第一个任务的ID
-    if (!taskId && response.data.data.length > 0) {
-      taskId = response.data.data[0].id;
+    if (!taskId && response.data.data.rows.length > 0) {
+      taskId = response.data.data.rows[0].id;
       console.log('使用已有任务，ID:', taskId);
     }
     
@@ -345,19 +345,17 @@ const testGetMyTasks = async () => {
 
 // 处理任务测试
 const testProcessTask = async () => {
-  if (!taskId) {
-    console.log('\n跳过处理任务测试：没有可处理的任务');
-    return false;
-  }
-  
   try {
     console.log('\n测试处理任务...');
+    if (!taskId) {
+      console.log('没有可处理的任务，跳过测试');
+      return;
+    }
     
     const taskProcess = {
-      action: 'approve', // approve, reject, complete
+      action: 'approve',
       comment: '同意请假申请',
-      formData: {
-        // 可以提供额外的表单数据
+      data: {
         approverComment: '批准，注意按时销假'
       }
     };
@@ -365,12 +363,12 @@ const testProcessTask = async () => {
     const response = await axios.post(
       `${API_BASE_URL}/workflows/tasks/${taskId}/process`,
       taskProcess,
-      { headers: getHeaders() }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
     
     console.log('任务处理成功:');
-    console.log('任务结果:', response.data.data.processResult);
-    console.log('处理人:', response.data.data.processor?.name);
+    console.log('处理结果:', response.data.data.action);
+    console.log('处理意见:', response.data.data.comment);
     console.log('处理时间:', response.data.data.processTime);
     
     return true;
@@ -384,38 +382,18 @@ const testProcessTask = async () => {
 const testCancelWorkflowInstance = async () => {
   try {
     console.log('\n测试取消工作流实例...');
+    if (!instanceId) {
+      console.log('没有可取消的工作流实例，跳过测试');
+      return;
+    }
     
-    // 创建一个新的实例用于测试取消
-    const now = moment();
-    const instance = {
-      title: '测试取消的请假申请 - ' + now.format('YYYY-MM-DD'),
-      formData: {
-        leaveType: '事假',
-        startDate: now.format('YYYY-MM-DD'),
-        endDate: now.add(1, 'days').format('YYYY-MM-DD'),
-        reason: '临时有事',
-        contactInfo: '13900139000'
-      }
-    };
-    
-    const createResponse = await axios.post(
-      `${API_BASE_URL}/workflows/${workflowId}/instances`,
-      instance,
-      { headers: getHeaders() }
-    );
-    
-    const testInstanceId = createResponse.data.data.instance.id;
-    console.log('创建测试实例成功，ID:', testInstanceId);
-    
-    // 取消实例
-    const cancelResponse = await axios.post(
-      `${API_BASE_URL}/workflows/instances/${testInstanceId}/cancel`,
+    const response = await axios.post(
+      `${API_BASE_URL}/workflows/instances/${instanceId}/cancel`,
       { reason: '测试取消功能' },
-      { headers: getHeaders() }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
     
-    console.log('工作流实例取消成功');
-    
+    console.log('工作流实例取消成功:', response.data);
     return true;
   } catch (error) {
     console.error('取消工作流实例失败:', error.response?.data || error.message);
@@ -427,31 +405,28 @@ const testCancelWorkflowInstance = async () => {
 const testUpdateWorkflow = async () => {
   try {
     console.log('\n测试更新工作流定义...');
-    
-    // 先获取当前工作流详情
-    const getResponse = await axios.get(
-      `${API_BASE_URL}/workflows/${workflowId}`,
-      { headers: getHeaders() }
-    );
-    
-    const currentWorkflow = getResponse.data.data.workflow;
+    if (!workflowId) {
+      console.log('没有可更新的工作流定义，跳过测试');
+      return;
+    }
     
     // 更新工作流
     const updatedWorkflow = {
-      name: currentWorkflow.name + ' (已更新)',
-      description: currentWorkflow.description + ' - 添加了更多描述',
-      status: currentWorkflow.status
+      name: '请假审批流程（已更新）',
+      description: '员工请假需要经过部门主管和HR审批 - 更新版本',
+      status: 'active'
     };
     
     const response = await axios.put(
       `${API_BASE_URL}/workflows/${workflowId}`,
       updatedWorkflow,
-      { headers: getHeaders() }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
     
     console.log('工作流更新成功:');
-    console.log('新名称:', response.data.data.workflow.name);
-    console.log('新描述:', response.data.data.workflow.description);
+    console.log('新名称:', response.data.data.name);
+    console.log('新描述:', response.data.data.description);
+    console.log('状态:', response.data.data.status);
     
     return true;
   } catch (error) {

@@ -1,4 +1,6 @@
-module.exports = (sequelize, DataTypes) => {
+const { DataTypes } = require('sequelize');
+
+module.exports = (sequelize) => {
   // 工作流定义模型
   const WorkflowDefinition = sequelize.define('WorkflowDefinition', {
     id: {
@@ -27,15 +29,29 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true,
       comment: '工作流描述'
     },
-    formConfig: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      comment: '表单配置JSON'
-    },
     nodeConfig: {
-      type: DataTypes.JSON,
+      type: DataTypes.TEXT('long'),
       allowNull: false,
-      comment: '节点配置JSON，包含审批流程定义'
+      comment: '节点配置JSON，包含审批流程定义',
+      get() {
+        const rawValue = this.getDataValue('nodeConfig');
+        return rawValue ? JSON.parse(rawValue) : null;
+      },
+      set(value) {
+        this.setDataValue('nodeConfig', JSON.stringify(value));
+      }
+    },
+    formConfig: {
+      type: DataTypes.TEXT('long'),
+      allowNull: true,
+      comment: '表单配置JSON',
+      get() {
+        const rawValue = this.getDataValue('formConfig');
+        return rawValue ? JSON.parse(rawValue) : null;
+      },
+      set(value) {
+        this.setDataValue('formConfig', value ? JSON.stringify(value) : null);
+      }
     },
     status: {
       type: DataTypes.ENUM('active', 'inactive', 'draft'),
@@ -55,7 +71,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     createdBy: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       comment: '创建人ID'
     },
     updatedBy: {
@@ -147,6 +163,11 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       comment: '工作流实例ID'
     },
+    workflowDefinitionId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      comment: '工作流定义ID'
+    },
     nodeId: {
       type: DataTypes.STRING(50),
       allowNull: false,
@@ -200,33 +221,55 @@ module.exports = (sequelize, DataTypes) => {
     order: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      comment: '节点序号'
+      defaultValue: 0,
+      comment: '节点顺序'
     }
   }, {
     tableName: 'workflow_node_instances',
     timestamps: true
   });
 
-  // 定义模型关联
-  WorkflowDefinition.hasMany(WorkflowInstance, {
-    foreignKey: 'workflowDefinitionId',
-    as: 'instances'
-  });
+  // 设置关联关系
+  WorkflowDefinition.associate = (models) => {
+    WorkflowDefinition.hasMany(models.WorkflowInstance, {
+      foreignKey: 'workflowDefinitionId',
+      as: 'definitionInstances'
+    });
+  };
 
-  WorkflowInstance.belongsTo(WorkflowDefinition, {
-    foreignKey: 'workflowDefinitionId',
-    as: 'definition'
-  });
+  WorkflowInstance.associate = (models) => {
+    WorkflowInstance.belongsTo(models.WorkflowDefinition, {
+      foreignKey: 'workflowDefinitionId',
+      as: 'workflowDefinition'
+    });
 
-  WorkflowInstance.hasMany(WorkflowNodeInstance, {
-    foreignKey: 'workflowInstanceId',
-    as: 'nodeInstances'
-  });
+    WorkflowInstance.hasMany(models.WorkflowNodeInstance, {
+      foreignKey: 'workflowInstanceId',
+      as: 'nodeInstances'
+    });
 
-  WorkflowNodeInstance.belongsTo(WorkflowInstance, {
-    foreignKey: 'workflowInstanceId',
-    as: 'workflowInstance'
-  });
+    WorkflowInstance.belongsTo(models.User, {
+      foreignKey: 'initiatorId',
+      as: 'initiator'
+    });
+  };
+
+  WorkflowNodeInstance.associate = (models) => {
+    WorkflowNodeInstance.belongsTo(models.WorkflowInstance, {
+      foreignKey: 'workflowInstanceId',
+      as: 'workflowInstance'
+    });
+
+    WorkflowNodeInstance.belongsTo(models.WorkflowDefinition, {
+      foreignKey: 'workflowDefinitionId',
+      as: 'nodeDefinition'
+    });
+    
+    WorkflowNodeInstance.belongsTo(models.User, {
+      foreignKey: 'assigneeId',
+      as: 'assignee'
+    });
+  };
 
   return {
     WorkflowDefinition,

@@ -1,5 +1,25 @@
 const jwt = require('jsonwebtoken');
-const { User, Role } = require('../models');
+const getModels = require('../models');
+
+let models;
+
+// 初始化模型
+const initializeModels = async () => {
+  try {
+    models = await getModels();
+  } catch (error) {
+    console.error('初始化模型失败:', error);
+    throw error;
+  }
+};
+
+// 确保模型已初始化
+const ensureModelsInitialized = async () => {
+  if (!models) {
+    await initializeModels();
+  }
+  return models;
+};
 
 /**
  * 验证Token中间件
@@ -55,6 +75,7 @@ exports.verifyToken = (req, res, next) => {
 exports.checkRole = (roles) => {
   return async (req, res, next) => {
     try {
+      const { User, Role } = await ensureModelsInitialized();
       const userId = req.userId;
       
       // 获取用户及其角色
@@ -97,6 +118,7 @@ exports.checkRole = (roles) => {
 exports.checkPermission = (permissions) => {
   return async (req, res, next) => {
     try {
+      const { User, Role } = await ensureModelsInitialized();
       const userId = req.userId;
       
       // 获取用户角色及关联的权限

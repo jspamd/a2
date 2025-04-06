@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
-const { Op } = require('sequelize');
+const { Op, literal } = require('sequelize');
+const { sequelize } = require('../models');
 const { AppError } = require('../middleware/errorHandler');
 const { 
   Document, 
@@ -12,7 +13,6 @@ const {
   DocumentPermission,
   User,
   Department,
-  sequelize
 } = require('../models');
 const { logError, logInfo } = require('../utils/logger');
 const { promisify } = require('util');
@@ -63,7 +63,7 @@ exports.getDocumentCategories = async (req, res, next) => {
 exports.getAllDocuments = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const userDepartmentId = req.user.departmentId;
+    const userDepartmentId = req.user.departmentId || null;
     
     // 查询参数
     const categoryId = req.query.categoryId;
@@ -99,16 +99,15 @@ exports.getAllDocuments = async (req, res, next) => {
           where: {
             [Op.or]: [
               { userId },
-              { departmentId: userDepartmentId },
-              { isPublic: true }
+              ...(userDepartmentId ? [{ departmentId: userDepartmentId }] : [])
             ]
           }
         });
         
         whereCondition[Op.or] = [
-          { createdBy: userId },
+          { uploaderId: userId },
           { isPublic: true },
-          { '$shares.id$': { [Op.ne]: null } }
+          { id: { [Op.in]: literal('(SELECT documentId FROM document_shares WHERE userId = ' + userId + (userDepartmentId ? ' OR departmentId = ' + userDepartmentId : '') + ')') } }
         ];
       }
     }
@@ -120,7 +119,7 @@ exports.getAllDocuments = async (req, res, next) => {
         ...includeConditions,
         {
           model: User,
-          as: 'creator',
+          as: 'uploader',
           attributes: ['id', 'username', 'name', 'avatar']
         },
         {
@@ -195,7 +194,7 @@ exports.getRecentDocuments = async (req, res, next) => {
       include: [
         {
           model: User,
-          as: 'creator',
+          as: 'uploader',
           attributes: ['id', 'username', 'name', 'avatar']
         },
         {
@@ -230,6 +229,7 @@ exports.searchDocuments = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const userDepartmentId = req.user.departmentId;
+    const userRoles = req.user.roles || [];
     const keyword = req.query.keyword || '';
     
     // 分页参数
@@ -238,20 +238,22 @@ exports.searchDocuments = async (req, res, next) => {
     const offset = (page - 1) * limit;
     
     // 构建查询条件
-    const whereCondition = {};
+    const whereCondition = {
+      deletedAt: null // 只搜索未删除的文档
+    };
     const includeConditions = [];
     
     // 关键词搜索
     if (keyword) {
       whereCondition[Op.or] = [
-        { name: { [Op.like]: `%${keyword}%` } },
+        { title: { [Op.like]: `%${keyword}%` } },
         { description: { [Op.like]: `%${keyword}%` } },
         { tags: { [Op.like]: `%${keyword}%` } }
       ];
     }
     
     // 权限控制
-    const isAdmin = req.user.roles && req.user.roles.includes('admin');
+    const isAdmin = userRoles.includes('admin');
     
     if (!isAdmin) {
       includeConditions.push({
@@ -261,8 +263,7 @@ exports.searchDocuments = async (req, res, next) => {
         where: {
           [Op.or]: [
             { userId },
-            { departmentId: userDepartmentId },
-            { isPublic: true }
+            ...(userDepartmentId ? [{ departmentId: userDepartmentId }] : [])
           ]
         }
       });
@@ -271,9 +272,9 @@ exports.searchDocuments = async (req, res, next) => {
         whereCondition[Op.or] || {},
         {
           [Op.or]: [
-            { createdBy: userId },
+            { uploaderId: userId },
             { isPublic: true },
-            { '$shares.id$': { [Op.ne]: null } }
+            { id: { [Op.in]: literal('(SELECT documentId FROM document_shares WHERE userId = ' + userId + (userDepartmentId ? ' OR departmentId = ' + userDepartmentId : '') + ')') } }
           ]
         }
       ];
@@ -288,7 +289,7 @@ exports.searchDocuments = async (req, res, next) => {
         ...includeConditions,
         {
           model: User,
-          as: 'creator',
+          as: 'uploader',
           attributes: ['id', 'username', 'name', 'avatar']
         },
         {
@@ -340,7 +341,7 @@ exports.getMyDocuments = async (req, res, next) => {
       include: [
         {
           model: User,
-          as: 'creator',
+          as: 'uploader',
           attributes: ['id', 'username', 'name', 'avatar']
         },
         {
@@ -411,7 +412,7 @@ exports.getSharedWithMe = async (req, res, next) => {
         },
         {
           model: User,
-          as: 'creator',
+          as: 'uploader',
           attributes: ['id', 'username', 'name', 'avatar']
         },
         {
@@ -458,20 +459,18 @@ exports.getDocumentById = async (req, res, next) => {
   try {
     const documentId = req.params.id;
     const userId = req.user.id;
-    const userRoles = req.user.roles;
+    const userRoles = req.user.roles || [];
     const userDepartmentId = req.user.departmentId;
 
-    // 检查文档访问权限
-    const hasAccess = await checkDocumentAccess(documentId, userId, userRoles, userDepartmentId);
-    if (!hasAccess) {
-      throw new AppError('没有权限访问此文档', 403);
-    }
-
-    const document = await Document.findByPk(documentId, {
+    const document = await Document.findOne({
+      where: {
+        id: documentId,
+        deletedAt: null
+      },
       include: [
         {
           model: User,
-          as: 'creator',
+          as: 'uploader',
           attributes: ['id', 'name', 'avatar']
         },
         {
@@ -489,12 +488,30 @@ exports.getDocumentById = async (req, res, next) => {
               attributes: ['id', 'name', 'avatar']
             }
           ]
+        },
+        {
+          model: DocumentShare,
+          as: 'shares'
+        },
+        {
+          model: DocumentPermission,
+          as: 'permissions'
         }
       ]
     });
 
     if (!document) {
       throw new AppError('文档不存在', 404);
+    }
+
+    // 管理员有所有权限
+    const isAdmin = userRoles.includes('admin');
+    if (!isAdmin) {
+      // 检查文档访问权限
+      const hasAccess = await checkDocumentAccess(documentId, userId, userRoles, userDepartmentId);
+      if (!hasAccess) {
+        throw new AppError('没有权限访问此文档', 403);
+      }
     }
 
     res.status(200).json({
@@ -527,7 +544,7 @@ exports.getDocumentVersions = async (req, res, next) => {
       include: [
         {
           model: User,
-          as: 'creator',
+          as: 'uploader',
           attributes: ['id', 'name', 'avatar']
         }
       ],
@@ -592,27 +609,29 @@ exports.uploadDocument = async (req, res, next) => {
     const result = await sequelize.transaction(async (t) => {
       // 创建文档记录
       const document = await Document.create({
-        name: name || originalname,
+        title: name || originalname,
         description: description || '',
         categoryId: categoryId || null,
-        tags: tags || '',
         isPublic: isPublic === 'true',
-        fileType: mimetype,
-        fileSize: size,
-        createdBy: userId,
+        departmentId: null,
+        filename: filename,
+        originalName: originalname,
+        path: filePath,
+        mimetype: mimetype,
+        size: size,
+        uploaderId: userId,
         viewCount: 0
       }, { transaction: t });
       
       // 创建文档版本记录
       const version = await DocumentVersion.create({
         documentId: document.id,
-        version: 1,
-        filePath: relativePath,
-        fileName: originalname,
-        fileType: mimetype,
-        fileSize: size,
-        changeLog: '初始版本',
-        createdBy: userId
+        version: '1.0',
+        filename: filename,
+        path: filePath,
+        size: size,
+        updaterId: userId,
+        changeLog: '初始版本'
       }, { transaction: t });
       
       return { document, version };
@@ -623,7 +642,7 @@ exports.uploadDocument = async (req, res, next) => {
       include: [
         {
           model: User,
-          as: 'creator',
+          as: 'uploader',
           attributes: ['id', 'username', 'name', 'avatar']
         },
         {
@@ -702,6 +721,22 @@ exports.updateDocument = async (req, res, next) => {
         }
       }
 
+      // 创建新版本记录
+      const latestVersion = await DocumentVersion.findOne({
+        where: { documentId },
+        order: [['version', 'DESC']]
+      });
+
+      const newVersion = await DocumentVersion.create({
+        documentId,
+        version: (latestVersion?.version || 0) + 1,
+        filename: file.originalname,
+        path: filePath,
+        size: file.size,
+        uploaderId: userId,
+        changeLog: req.body.changeLog || '更新文档'
+      });
+
       // 更新文档记录
       await document.update({
         title,
@@ -712,23 +747,8 @@ exports.updateDocument = async (req, res, next) => {
         filePath: uniqueFileName,
         fileSize: file.size,
         fileType: file.mimetype,
-        originalName: file.originalname
-      });
-
-      // 创建新版本记录
-      const latestVersion = await DocumentVersion.findOne({
-        where: { documentId },
-        order: [['version', 'DESC']]
-      });
-
-      await DocumentVersion.create({
-        documentId,
-        version: (latestVersion?.version || 0) + 1,
-        filePath: uniqueFileName,
-        fileSize: file.size,
-        fileType: file.mimetype,
         originalName: file.originalname,
-        createdBy: userId
+        version: newVersion.version
       });
     } else {
       // 仅更新文档信息
@@ -824,7 +844,7 @@ exports.uploadNewVersion = async (req, res, next) => {
       include: [
         {
           model: User,
-          as: 'creator',
+          as: 'uploader',
           attributes: ['id', 'username', 'name', 'avatar']
         }
       ]
@@ -1153,7 +1173,7 @@ exports.getDocumentComments = async (req, res, next) => {
       include: [
         {
           model: User,
-          as: 'creator',
+          as: 'uploader',
           attributes: ['id', 'username', 'name', 'avatar']
         }
       ],
@@ -1238,43 +1258,6 @@ exports.deleteDocumentComment = async (req, res, next) => {
 };
 
 /**
- * 获取文档版本历史
- */
-exports.getDocumentVersions = async (req, res, next) => {
-  try {
-    const documentId = req.params.id;
-    const userId = req.user.id;
-
-    // 检查文档访问权限
-    const hasAccess = await checkDocumentAccess(documentId, userId, req.user.roles, req.user.departmentId);
-    if (!hasAccess) {
-      throw new AppError('没有权限查看此文档的版本历史', 403);
-    }
-
-    const versions = await DocumentVersion.findAll({
-      where: { documentId },
-      include: [
-        {
-          model: User,
-          as: 'creator',
-          attributes: ['id', 'name', 'avatar']
-        }
-      ],
-      order: [['version', 'DESC']]
-    });
-
-    res.status(200).json({
-      status: 'success',
-      message: '获取文档版本历史成功',
-      data: versions
-    });
-  } catch (error) {
-    logError('获取文档版本历史失败', { error: error.message });
-    next(error);
-  }
-};
-
-/**
  * 下载文档
  */
 exports.downloadDocument = async (req, res, next) => {
@@ -1313,6 +1296,10 @@ async function checkDocumentAccess(documentId, userId, userRoles, userDepartment
   const document = await Document.findByPk(documentId, {
     include: [
       {
+        model: DocumentShare,
+        as: 'shares'
+      },
+      {
         model: DocumentPermission,
         as: 'permissions'
       }
@@ -1323,22 +1310,61 @@ async function checkDocumentAccess(documentId, userId, userRoles, userDepartment
     return false;
   }
   
-  // 文档创建者始终有权限
-  if (document.createdBy === userId) {
+  // 管理员有所有权限
+  if (userRoles && userRoles.includes('admin')) {
     return true;
   }
   
-  // 检查权限
-  const hasPermission = document.permissions.some(p => {
-    return (
-      (p.targetType === 'user' && p.targetId === userId) ||
-      (p.targetType === 'role' && userRoles.some(role => role.id === p.targetId || role === p.targetId)) ||
-      (p.targetType === 'department' && p.targetId === userDepartmentId) ||
-      (p.targetType === 'all')
-    );
-  });
+  // 文档创建者有权限
+  if (document.uploaderId === userId) {
+    return true;
+  }
   
-  return hasPermission;
+  // 公开文档所有人都有权限
+  if (document.isPublic) {
+    return true;
+  }
+  
+  // 检查共享权限
+  if (document.shares && document.shares.length > 0) {
+    const hasShare = document.shares.some(share => {
+      return (
+        share.userId === userId ||
+        (userDepartmentId && share.departmentId === userDepartmentId)
+      );
+    });
+    
+    if (hasShare) {
+      return true;
+    }
+  }
+  
+  // 检查权限
+  if (document.permissions && document.permissions.length > 0) {
+    const hasPermission = document.permissions.some(p => {
+      if (p.targetType === 'user' && p.targetId === userId) {
+        return true;
+      }
+      if (p.targetType === 'role' && userRoles && userRoles.some(role => 
+        typeof role === 'object' ? role.id === p.targetId : role === p.targetId
+      )) {
+        return true;
+      }
+      if (p.targetType === 'department' && p.targetId === userDepartmentId) {
+        return true;
+      }
+      if (p.targetType === 'all') {
+        return true;
+      }
+      return false;
+    });
+    
+    if (hasPermission) {
+      return true;
+    }
+  }
+  
+  return false;
 }
 
 /**
@@ -1347,55 +1373,87 @@ async function checkDocumentAccess(documentId, userId, userRoles, userDepartment
 exports.createDocument = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { title, description, categoryId, isPublic, departmentId } = req.body;
-    const file = req.file;
+    const { title, content, description, categoryId, isPublic } = req.body;
 
-    if (!file) {
-      throw new AppError('请上传文件', 400);
+    // 验证必填字段
+    if (!title) {
+      return next(new AppError('文档标题为必填项', 400));
     }
 
-    // 确保上传目录存在
-    await ensureUploadDirExists();
+    // 如果指定了分类，检查其是否存在
+    if (categoryId) {
+      const category = await DocumentCategory.findByPk(categoryId);
+      if (!category) {
+        return next(new AppError('选择的分类不存在', 404));
+      }
+    }
 
     // 生成唯一文件名
-    const uniqueFileName = `${uuidv4()}${path.extname(file.originalname)}`;
-    const filePath = path.join(UPLOAD_DIR, uniqueFileName);
+    const filename = `${uuidv4()}.html`;
+    const filePath = path.join('documents', filename);
 
-    // 移动文件到目标目录
-    await fs.promises.rename(file.path, filePath);
-
-    // 创建文档记录
+    // 创建HTML文档记录
     const document = await Document.create({
       title,
-      description,
-      categoryId,
-      isPublic,
-      departmentId,
-      creatorId: userId,
-      filePath: uniqueFileName,
-      fileSize: file.size,
-      fileType: file.mimetype,
-      originalName: file.originalname
+      content: content || '',
+      description: description || '',
+      categoryId: categoryId || null,
+      isPublic: isPublic === 'true',
+      uploaderId: userId,
+      type: 'html',
+      viewCount: 0,
+      filename: filename,
+      path: filePath,
+      size: Buffer.from(content || '').length
     });
 
-    // 创建初始版本记录
+    // 创建文档版本记录
     await DocumentVersion.create({
       documentId: document.id,
-      version: 1,
-      filePath: uniqueFileName,
-      fileSize: file.size,
-      fileType: file.mimetype,
-      originalName: file.originalname,
-      createdBy: userId
+      version: '1.0',
+      content: content || '',
+      updaterId: userId,
+      changeLog: '初始版本',
+      filename: filename,
+      path: filePath,
+      size: Buffer.from(content || '').length,
+      uploaderId: userId
+    });
+
+    // 查询完整的文档信息
+    const completeDocument = await Document.findByPk(document.id, {
+      include: [
+        {
+          model: User,
+          as: 'uploader',
+          attributes: ['id', 'username', 'name', 'avatar']
+        },
+        {
+          model: DocumentCategory,
+          as: 'category'
+        },
+        {
+          model: DocumentVersion,
+          as: 'versions',
+          limit: 1,
+          order: [['version', 'DESC']]
+        }
+      ]
+    });
+
+    logInfo('用户创建了新HTML文档', { 
+      documentId: document.id,
+      userId,
+      title
     });
 
     res.status(201).json({
       status: 'success',
-      message: '创建文档成功',
-      data: document
+      message: '文档创建成功',
+      data: completeDocument
     });
   } catch (error) {
-    logError('创建文档失败', { error: error.message });
+    logError('创建HTML文档失败', { error: error.message });
     next(error);
   }
 };
@@ -1436,6 +1494,610 @@ exports.updateDocumentPermissions = async (req, res, next) => {
     });
   } catch (error) {
     logError('更新文档权限失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 创建文件夹
+ */
+exports.createFolder = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { title, description, parentId, isPublic } = req.body;
+
+    // 验证必填字段
+    if (!title) {
+      return next(new AppError('文件夹名称为必填项', 400));
+    }
+
+    // 如果指定了父文件夹，检查其是否存在
+    if (parentId) {
+      const parentFolder = await Document.findOne({
+        where: { 
+          id: parentId,
+          type: 'folder'
+        }
+      });
+      
+      if (!parentFolder) {
+        return next(new AppError('父文件夹不存在', 404));
+      }
+    }
+
+    // 创建文件夹记录
+    const folder = await Document.create({
+      title,
+      description: description || '',
+      parentId: parentId || null,
+      isPublic: isPublic === 'true',
+      type: 'folder',
+      uploaderId: userId
+    });
+
+    // 查询完整的文件夹信息
+    const completeFolder = await Document.findByPk(folder.id, {
+      include: [
+        {
+          model: User,
+          as: 'uploader',
+          attributes: ['id', 'username', 'name', 'avatar']
+        }
+      ]
+    });
+
+    logInfo('用户创建了新文件夹', { 
+      folderId: folder.id,
+      userId,
+      title
+    });
+
+    res.status(201).json({
+      status: 'success',
+      message: '文件夹创建成功',
+      data: completeFolder
+    });
+  } catch (error) {
+    logError('创建文件夹失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 创建文档分类
+ */
+exports.createDocumentCategory = async (req, res, next) => {
+  try {
+    const { name, code, description } = req.body;
+    
+    // 验证必填字段
+    if (!name || !code) {
+      throw new AppError('分类名称和代码为必填项', 400);
+    }
+    
+    // 检查分类代码是否已存在
+    const existingCategory = await DocumentCategory.findOne({
+      where: { code }
+    });
+    
+    if (existingCategory) {
+      throw new AppError('分类代码已存在', 400);
+    }
+    
+    // 创建分类
+    const category = await DocumentCategory.create({
+      name,
+      code,
+      description,
+      createdBy: req.user.id
+    });
+    
+    res.status(201).json({
+      status: 'success',
+      message: '创建文档分类成功',
+      data: category
+    });
+  } catch (error) {
+    logError('创建文档分类失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 更新文档分类
+ */
+exports.updateDocumentCategory = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, code, description } = req.body;
+    
+    // 查找分类
+    const category = await DocumentCategory.findByPk(id);
+    if (!category) {
+      throw new AppError('文档分类不存在', 404);
+    }
+    
+    // 如果更新代码，检查是否与其他分类冲突
+    if (code && code !== category.code) {
+      const existingCategory = await DocumentCategory.findOne({
+        where: { code }
+      });
+      
+      if (existingCategory) {
+        throw new AppError('分类代码已存在', 400);
+      }
+    }
+    
+    // 更新分类
+    await category.update({
+      name: name || category.name,
+      code: code || category.code,
+      description: description || category.description
+    });
+    
+    res.status(200).json({
+      status: 'success',
+      message: '更新文档分类成功',
+      data: category
+    });
+  } catch (error) {
+    logError('更新文档分类失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 删除文档分类
+ */
+exports.deleteDocumentCategory = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    
+    // 查找分类
+    const category = await DocumentCategory.findByPk(id);
+    if (!category) {
+      throw new AppError('文档分类不存在', 404);
+    }
+    
+    // 检查是否有文档使用此分类
+    const documentCount = await Document.count({
+      where: { categoryId: id }
+    });
+    
+    if (documentCount > 0) {
+      throw new AppError('无法删除：该分类下存在文档', 400);
+    }
+    
+    // 删除分类
+    await category.destroy();
+    
+    res.status(200).json({
+      status: 'success',
+      message: '删除文档分类成功'
+    });
+  } catch (error) {
+    logError('删除文档分类失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 预览文档
+ */
+exports.previewDocument = async (req, res, next) => {
+  try {
+    const documentId = req.params.id;
+    const userId = req.user.id;
+    const userRoles = req.user.roles || [];
+    const userDepartmentId = req.user.departmentId;
+
+    // 管理员有所有权限
+    const isAdmin = userRoles.includes('admin');
+    if (!isAdmin) {
+      // 检查文档访问权限
+      const hasAccess = await checkDocumentAccess(documentId, userId, userRoles, userDepartmentId);
+      if (!hasAccess) {
+        throw new AppError('没有权限预览此文档', 403);
+      }
+    }
+
+    const document = await Document.findByPk(documentId, {
+      include: [
+        {
+          model: DocumentVersion,
+          as: 'versions',
+          order: [['version', 'DESC']],
+          limit: 1
+        }
+      ]
+    });
+
+    if (!document) {
+      throw new AppError('文档不存在', 404);
+    }
+
+    // 增加文档浏览次数
+    await document.increment('accessCount');
+
+    // 获取最新版本的内容
+    const latestVersion = document.versions[0];
+    const content = latestVersion ? latestVersion.content : '';
+
+    res.status(200).json({
+      status: 'success',
+      message: '获取文档预览成功',
+      data: {
+        id: document.id,
+        title: document.title,
+        content: content,
+        version: latestVersion ? latestVersion.version : '1.0',
+        viewCount: document.accessCount + 1
+      }
+    });
+  } catch (error) {
+    logError('获取文档预览失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 获取文档统计信息
+ */
+exports.getDocumentStats = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const userRoles = req.user.roles || [];
+    const userDepartmentId = req.user.departmentId;
+
+    // 构建查询条件
+    const whereCondition = {
+      deletedAt: null
+    };
+    const includeConditions = [];
+
+    // 权限控制
+    const isAdmin = userRoles.includes('admin');
+    if (!isAdmin) {
+      includeConditions.push({
+        model: DocumentShare,
+        as: 'shares',
+        required: false,
+        where: {
+          [Op.or]: [
+            { userId },
+            ...(userDepartmentId ? [{ departmentId: userDepartmentId }] : [])
+          ]
+        }
+      });
+
+      whereCondition[Op.or] = [
+        { uploaderId: userId },
+        { isPublic: true },
+        { id: { [Op.in]: literal('(SELECT documentId FROM document_shares WHERE userId = ' + userId + (userDepartmentId ? ' OR departmentId = ' + userDepartmentId : '') + ')') } }
+      ];
+    }
+
+    // 获取文档总数
+    const totalDocuments = await Document.count({
+      where: whereCondition,
+      include: includeConditions,
+      distinct: true
+    });
+
+    // 获取分类统计
+    const categoryStats = await Document.findAll({
+      attributes: [
+        'categoryId',
+        [sequelize.fn('COUNT', sequelize.col('Document.id')), 'count']
+      ],
+      where: whereCondition,
+      include: [
+        {
+          model: DocumentCategory,
+          as: 'category',
+          attributes: ['name'],
+          required: false
+        }
+      ],
+      group: ['Document.categoryId', 'category.id'],
+      having: literal('COUNT(Document.id) > 0')
+    });
+
+    // 获取最近一周的文档创建趋势
+    const lastWeek = new Date();
+    lastWeek.setDate(lastWeek.getDate() - 7);
+
+    const dailyStats = await Document.findAll({
+      attributes: [
+        [sequelize.fn('DATE', sequelize.col('createdAt')), 'date'],
+        [sequelize.fn('COUNT', sequelize.col('Document.id')), 'count']
+      ],
+      where: {
+        ...whereCondition,
+        createdAt: {
+          [Op.gte]: lastWeek
+        }
+      },
+      group: [sequelize.fn('DATE', sequelize.col('createdAt'))]
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: '获取文档统计信息成功',
+      data: {
+        totalDocuments,
+        categoryStats: categoryStats.map(stat => ({
+          categoryId: stat.categoryId,
+          categoryName: stat.category ? stat.category.name : '未分类',
+          count: parseInt(stat.getDataValue('count'))
+        })),
+        dailyStats: dailyStats.map(stat => ({
+          date: stat.getDataValue('date'),
+          count: parseInt(stat.getDataValue('count'))
+        }))
+      }
+    });
+  } catch (error) {
+    logError('获取文档统计信息失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 比较文档版本
+ */
+exports.compareDocumentVersions = async (req, res, next) => {
+  try {
+    const documentId = req.params.id;
+    const { version1, version2 } = req.query;
+    const userId = req.user.id;
+    const userRoles = req.user.roles || [];
+    const userDepartmentId = req.user.departmentId;
+
+    // 管理员有所有权限
+    const isAdmin = userRoles.includes('admin');
+    if (!isAdmin) {
+      // 检查文档访问权限
+      const hasAccess = await checkDocumentAccess(documentId, userId, userRoles, userDepartmentId);
+      if (!hasAccess) {
+        throw new AppError('没有权限比较此文档的版本', 403);
+      }
+    }
+
+    // 获取要比较的两个版本
+    const versions = await DocumentVersion.findAll({
+      where: {
+        documentId,
+        version: {
+          [Op.in]: [version1, version2]
+        }
+      },
+      include: [
+        {
+          model: User,
+          as: 'uploader',
+          attributes: ['id', 'name', 'avatar']
+        }
+      ],
+      order: [['version', 'ASC']]
+    });
+
+    if (versions.length !== 2) {
+      throw new AppError('指定的版本不存在', 404);
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: '获取文档版本比较成功',
+      data: {
+        version1: {
+          version: versions[0].version,
+          content: versions[0].content,
+          updatedAt: versions[0].updatedAt,
+          changeLog: versions[0].changeLog,
+          uploader: versions[0].uploader
+        },
+        version2: {
+          version: versions[1].version,
+          content: versions[1].content,
+          updatedAt: versions[1].updatedAt,
+          changeLog: versions[1].changeLog,
+          uploader: versions[1].uploader
+        }
+      }
+    });
+  } catch (error) {
+    logError('比较文档版本失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 获取文档权限
+ */
+exports.getDocumentPermissions = async (req, res, next) => {
+  try {
+    const documentId = req.params.id;
+    const userId = req.user.id;
+    const userRoles = req.user.roles || [];
+    const userDepartmentId = req.user.departmentId;
+
+    // 检查文档是否存在
+    const document = await Document.findByPk(documentId, {
+      include: [
+        {
+          model: DocumentPermission,
+          as: 'permissions',
+          include: [
+            {
+              model: User,
+              as: 'user',
+              attributes: ['id', 'name', 'avatar']
+            },
+            {
+              model: Department,
+              as: 'department',
+              attributes: ['id', 'name']
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!document) {
+      throw new AppError('文档不存在', 404);
+    }
+
+    // 检查访问权限
+    const hasAccess = await checkDocumentAccess(documentId, userId, userRoles, userDepartmentId);
+    if (!hasAccess) {
+      throw new AppError('没有权限访问此文档', 403);
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: '获取文档权限成功',
+      data: document.permissions
+    });
+  } catch (error) {
+    logError('获取文档权限失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 获取回收站文档列表
+ */
+exports.getRecycleBin = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const userRoles = req.user.roles || [];
+
+    // 构建查询条件
+    const whereCondition = {
+      deletedAt: {
+        [Op.ne]: null
+      }
+    };
+
+    // 非管理员只能看到自己的文档
+    if (!userRoles.includes('admin')) {
+      whereCondition.uploaderId = userId;
+    }
+
+    const documents = await Document.findAll({
+      where: whereCondition,
+      include: [
+        {
+          model: User,
+          as: 'uploader',
+          attributes: ['id', 'name', 'avatar']
+        },
+        {
+          model: DocumentCategory,
+          as: 'category'
+        }
+      ],
+      paranoid: false // 包含已删除的记录
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: '获取回收站文档列表成功',
+      data: documents
+    });
+  } catch (error) {
+    logError('获取回收站文档列表失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 恢复回收站中的文档
+ */
+exports.restoreDocument = async (req, res, next) => {
+  try {
+    const documentId = req.params.id;
+    const userId = req.user.id;
+    const userRoles = req.user.roles || [];
+
+    // 查找文档（包括已删除的）
+    const document = await Document.findOne({
+      where: { id: documentId },
+      paranoid: false
+    });
+
+    if (!document) {
+      throw new AppError('文档不存在', 404);
+    }
+
+    // 检查权限
+    if (!userRoles.includes('admin') && document.uploaderId !== userId) {
+      throw new AppError('没有权限恢复此文档', 403);
+    }
+
+    // 恢复文档
+    await document.restore();
+
+    // 获取完整的文档信息
+    const restoredDocument = await Document.findByPk(document.id, {
+      include: [
+        {
+          model: User,
+          as: 'uploader',
+          attributes: ['id', 'name', 'avatar']
+        },
+        {
+          model: DocumentCategory,
+          as: 'category'
+        }
+      ]
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: '文档恢复成功',
+      data: restoredDocument
+    });
+  } catch (error) {
+    logError('恢复文档失败', { error: error.message });
+    next(error);
+  }
+};
+
+/**
+ * 永久删除文档
+ */
+exports.deleteDocumentPermanently = async (req, res, next) => {
+  try {
+    const documentId = req.params.id;
+    const userId = req.user.id;
+    const userRoles = req.user.roles || [];
+
+    // 查找文档（包括已删除的）
+    const document = await Document.findOne({
+      where: { id: documentId },
+      paranoid: false
+    });
+
+    if (!document) {
+      throw new AppError('文档不存在', 404);
+    }
+
+    // 检查权限
+    if (!userRoles.includes('admin') && document.uploaderId !== userId) {
+      throw new AppError('没有权限删除此文档', 403);
+    }
+
+    // 永久删除文档
+    await document.destroy({ force: true });
+
+    res.status(200).json({
+      status: 'success',
+      message: '文档永久删除成功'
+    });
+  } catch (error) {
+    logError('永久删除文档失败', { error: error.message });
     next(error);
   }
 }; 

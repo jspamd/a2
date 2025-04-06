@@ -1,4 +1,8 @@
 module.exports = (sequelize, DataTypes) => {
+  // 导入其他模型
+  const User = sequelize.models.User;
+  const Department = sequelize.models.Department;
+
   // 文档分类模型
   const DocumentCategory = sequelize.define('DocumentCategory', {
     id: {
@@ -20,8 +24,7 @@ module.exports = (sequelize, DataTypes) => {
     parentId: {
       type: DataTypes.INTEGER,
       allowNull: true,
-      defaultValue: 0,
-      comment: '父分类ID，0表示一级分类'
+      comment: '父分类ID，null表示一级分类'
     },
     path: {
       type: DataTypes.STRING(255),
@@ -76,25 +79,31 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    type: {
+      type: DataTypes.ENUM('file', 'folder', 'html'),
+      allowNull: false,
+      defaultValue: 'file',
+      comment: '文档类型：file-文件，folder-文件夹，html-HTML文档'
+    },
     filename: {
       type: DataTypes.STRING(255),
-      allowNull: false
+      allowNull: true
     },
     originalName: {
       type: DataTypes.STRING(255),
-      allowNull: false
+      allowNull: true
     },
     path: {
       type: DataTypes.STRING(255),
-      allowNull: false
+      allowNull: true
     },
     mimetype: {
       type: DataTypes.STRING(100),
-      allowNull: false
+      allowNull: true
     },
     size: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       comment: '文件大小，单位字节'
     },
     extension: {
@@ -143,6 +152,16 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.INTEGER,
       allowNull: true,
       comment: '原始文档ID，用于版本管理'
+    },
+    parentId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      comment: '父文件夹ID'
+    },
+    folderId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      comment: '所属文件夹ID'
     }
   }, {
     timestamps: true,
@@ -240,37 +259,38 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       comment: '文档ID'
     },
-    sharedById: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      comment: '共享者ID，关联到User表'
-    },
-    sharedToId: {
+    userId: {
       type: DataTypes.INTEGER,
       allowNull: true,
-      comment: '被共享者ID，关联到User表，为null则表示共享给部门或角色'
+      comment: '被共享用户ID'
     },
-    sharedToDeptId: {
+    departmentId: {
       type: DataTypes.INTEGER,
       allowNull: true,
-      comment: '被共享部门ID，关联到Department表'
-    },
-    sharedToRoleId: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-      comment: '被共享角色ID，关联到Role表'
+      comment: '被共享部门ID'
     },
     permission: {
       type: DataTypes.ENUM('read', 'edit', 'full'),
       defaultValue: 'read',
       comment: 'read-只读,edit-可编辑,full-完全控制'
     },
+    sharedById: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      comment: '共享者ID'
+    },
     expiryDate: {
       type: DataTypes.DATE,
       allowNull: true,
       comment: '过期时间，null表示永不过期'
+    },
+    isPublic: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      comment: '是否公开共享'
     }
   }, {
+    tableName: 'document_shares',
     timestamps: true
   });
 
@@ -302,20 +322,79 @@ module.exports = (sequelize, DataTypes) => {
     },
     size: {
       type: DataTypes.INTEGER,
-      allowNull: false
+      allowNull: false,
+      comment: '文件大小，单位字节'
     },
-    updaterId: {
+    uploaderId: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      comment: '更新者ID，关联到User表'
+      comment: '上传者ID'
     },
     changeLog: {
       type: DataTypes.TEXT,
       allowNull: true,
-      comment: '变更日志'
+      comment: '变更说明'
     }
   }, {
+    tableName: 'document_versions',
     timestamps: true
+  });
+
+  // 文档评论模型
+  const DocumentComment = sequelize.define('DocumentComment', {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false
+    },
+    documentId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      comment: '文档ID'
+    },
+    userId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      comment: '评论者ID'
+    },
+    content: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+      comment: '评论内容'
+    }
+  }, {
+    tableName: 'document_comments',
+    timestamps: true
+  });
+
+  // 文档收藏模型
+  const DocumentStar = sequelize.define('DocumentStar', {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false
+    },
+    documentId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      comment: '文档ID'
+    },
+    userId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      comment: '用户ID'
+    }
+  }, {
+    tableName: 'document_stars',
+    timestamps: true,
+    indexes: [
+      {
+        unique: true,
+        fields: ['documentId', 'userId']
+      }
+    ]
   });
 
   // 定义模型关联
@@ -343,9 +422,14 @@ module.exports = (sequelize, DataTypes) => {
     });
 
     // 文档版本关联 - 修改别名，解决冲突
-    Document.hasMany(Document, {
-      foreignKey: 'originalId',
-      as: 'documentVersions'
+    Document.hasMany(DocumentVersion, {
+      foreignKey: 'documentId',
+      as: 'versions'
+    });
+
+    DocumentVersion.belongsTo(Document, {
+      foreignKey: 'documentId',
+      as: 'document'
     });
 
     // 文档与权限的关联
@@ -368,10 +452,65 @@ module.exports = (sequelize, DataTypes) => {
     Folder.hasMany(Folder, { foreignKey: 'parentId', as: 'subFolders' });
 
     Document.hasMany(DocumentShare, { foreignKey: 'documentId', as: 'shares' });
-    DocumentShare.belongsTo(Document, { foreignKey: 'documentId' });
+    DocumentShare.belongsTo(Document, { foreignKey: 'documentId', as: 'document' });
 
-    Document.hasMany(DocumentVersion, { foreignKey: 'documentId', as: 'versions' });
-    DocumentVersion.belongsTo(Document, { foreignKey: 'documentId' });
+    // 文档版本关联
+    DocumentVersion.belongsTo(User, {
+      foreignKey: 'uploaderId',
+      as: 'uploader'
+    });
+
+    // 文档共享关联
+    DocumentShare.belongsTo(User, {
+      foreignKey: 'sharedById',
+      as: 'sharedBy'
+    });
+    
+    DocumentShare.belongsTo(User, {
+      foreignKey: 'userId',
+      as: 'sharedTo'
+    });
+    
+    DocumentShare.belongsTo(Department, {
+      foreignKey: 'departmentId',
+      as: 'department'
+    });
+
+    // 文档评论关联
+    Document.hasMany(DocumentComment, {
+      foreignKey: 'documentId',
+      as: 'comments'
+    });
+
+    DocumentComment.belongsTo(Document, {
+      foreignKey: 'documentId',
+      as: 'document'
+    });
+
+    DocumentComment.belongsTo(User, {
+      foreignKey: 'userId',
+      as: 'user'
+    });
+
+    // 文档收藏关联
+    Document.hasMany(DocumentStar, {
+      foreignKey: 'documentId',
+      as: 'stars'
+    });
+
+    DocumentStar.belongsTo(Document, {
+      foreignKey: 'documentId',
+      as: 'document'
+    });
+
+    DocumentStar.belongsTo(User, {
+      foreignKey: 'userId',
+      as: 'user'
+    });
+
+    // 文档权限和用户、部门的关联
+    DocumentPermission.belongsTo(User, { foreignKey: 'targetId', as: 'user', constraints: false });
+    DocumentPermission.belongsTo(Department, { foreignKey: 'targetId', as: 'department', constraints: false });
   };
 
   return {
@@ -381,6 +520,8 @@ module.exports = (sequelize, DataTypes) => {
     Folder,
     DocumentShare,
     DocumentVersion,
+    DocumentComment,
+    DocumentStar,
     defineAssociations
   };
 };

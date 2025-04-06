@@ -1,173 +1,132 @@
-const { Sequelize } = require('sequelize');
-const dbConnect = require('../config/database');
-const { sequelize } = require('../config/database');
 const fs = require('fs');
 const path = require('path');
-const dotenv = require('dotenv');
+const Sequelize = require('sequelize');
+const config = require('../config/database');
 const { logger } = require('../utils/logger');
 
-// 加载环境变量
-dotenv.config();
-
-// 导入所有模型
 const db = {};
 
-try {
-  // 导入基础模型
-  logger.info('正在加载基础模型...');
-  const User = require('./user.model')(sequelize, Sequelize.DataTypes);
-  const Role = require('./role.model')(sequelize, Sequelize.DataTypes);
-  const Department = require('./department.model')(sequelize, Sequelize.DataTypes);
-  const Permission = require('./permission.model')(sequelize, Sequelize.DataTypes);
+// 初始化数据库连接和模型
+async function initializeDatabase() {
+  // 创建Sequelize实例
+  let sequelize;
+  try {
+    logger.info('正在创建数据库连接...');
+    logger.info('数据库配置:', {
+      database: config.database,
+      username: config.username,
+      host: config.host,
+      port: config.port,
+      dialect: 'mysql'
+    });
+    
+    sequelize = new Sequelize(
+      config.database,
+      config.username,
+      config.password,
+      {
+        host: config.host,
+        port: config.port,
+        dialect: 'mysql',
+        logging: config.logging,
+        timezone: config.timezone,
+        define: config.define
+      }
+    );
+  } catch (error) {
+    logger.error('创建数据库连接失败:', error);
+    throw error;
+  }
 
-  // 导入工作流模型
-  logger.info('正在加载工作流模型...');
-  const { 
-    WorkflowDefinition, 
-    WorkflowInstance, 
-    WorkflowNodeInstance 
-  } = require('./workflow.model')(sequelize, Sequelize.DataTypes);
+  // 测试数据库连接
+  try {
+    logger.info('正在测试数据库连接...');
+    await sequelize.authenticate();
+    logger.info('数据库连接测试成功');
+  } catch (error) {
+    logger.error('数据库连接测试失败:', error);
+    throw error;
+  }
 
-  // 导入文档模型
-  logger.info('正在加载文档模型...');
-  const { 
-    DocumentCategory,
-    Document, 
-    DocumentPermission,
-    Folder, 
-    DocumentShare, 
-    DocumentVersion,
-    defineAssociations: defineDocumentAssociations
-  } = require('./document.model')(sequelize, Sequelize.DataTypes);
+  // 导入所有模型
+  const modelFiles = fs.readdirSync(__dirname)
+    .filter(file => {
+      return (file.indexOf('.') !== 0) && 
+             (file !== 'index.js') && 
+             (file.slice(-3) === '.js');
+    });
 
-  // 导入考勤模型
-  logger.info('正在加载考勤模型...');
-  const { 
-    AttendanceRule,
-    DepartmentAttendanceRule,
-    AttendanceRecord, 
-    LeaveRecord, 
-    OvertimeRecord 
-  } = require('./attendance.model')(sequelize, Sequelize.DataTypes);
+  logger.info('找到以下模型文件:', modelFiles);
 
-  // 导入公告模型
-  logger.info('正在加载公告模型...');
-  const { 
-    Announcement, 
-    AnnouncementTarget, 
-    AnnouncementRead 
-  } = require('./announcement.model')(sequelize, Sequelize.DataTypes);
+  // 首先加载所有模型
+  const modelDefinitions = {};
+  for (const file of modelFiles) {
+    try {
+      logger.info(`正在加载模型文件: ${file}`);
+      const modelPath = path.join(__dirname, file);
+      logger.info(`模型文件完整路径: ${modelPath}`);
+      
+      const modelModule = require(modelPath);
+      const model = modelModule(sequelize, Sequelize.DataTypes);
+      logger.info(`模型文件 ${file} 加载结果:`, model);
+      
+      if (typeof model === 'object') {
+        for (const modelName in model) {
+          if (model.hasOwnProperty(modelName)) {
+            logger.info(`注册模型: ${modelName}`);
+            modelDefinitions[modelName] = model[modelName];
+          }
+        }
+      } else if (typeof model === 'function') {
+        // 处理返回单个模型的情况
+        const modelName = file.replace('.model.js', '');
+        logger.info(`注册单个模型: ${modelName}`);
+        modelDefinitions[modelName] = model;
+      } else {
+        logger.error(`模型文件 ${file} 返回值格式错误，期望是对象或函数，实际是 ${typeof model}`);
+      }
+    } catch (error) {
+      logger.error(`加载模型文件 ${file} 失败:`, error);
+      throw error;
+    }
+  }
 
-  // 导入日程模型
-  logger.info('正在加载日程模型...');
-  const { 
-    Schedule, 
-    ScheduleParticipant, 
-    MeetingRoom, 
-    RoomReservation 
-  } = require('./schedule.model')(sequelize, Sequelize.DataTypes);
+  // 将所有模型添加到db对象中
+  Object.assign(db, modelDefinitions);
 
-  logger.info('正在设置模型关联关系...');
+  logger.info('已加载的所有模型:', Object.keys(db));
 
-  // 设置基础模型关联关系
-  // 用户和角色 - 多对多关系
-  User.belongsToMany(Role, { through: 'UserRoles', timestamps: true });
-  Role.belongsToMany(User, { through: 'UserRoles', timestamps: true });
+  // 然后设置所有模型的关联关系
+  for (const modelName of Object.keys(modelDefinitions)) {
+    try {
+      if (modelDefinitions[modelName].associate) {
+        logger.info(`设置模型关联: ${modelName}`);
+        modelDefinitions[modelName].associate(modelDefinitions);
+      }
+    } catch (error) {
+      logger.error(`设置模型 ${modelName} 关联关系失败:`, error);
+      logger.error('错误详情:', error);
+      logger.error('可用的模型:', Object.keys(modelDefinitions));
+      throw error;
+    }
+  }
 
-  // 用户和部门 - 多对一关系
-  User.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
-  Department.hasMany(User, { foreignKey: 'departmentId', as: 'members' });
-
-  // 部门和管理者(用户) - 多对一关系
-  Department.belongsTo(User, { foreignKey: 'managerId', as: 'manager' });
-
-  // 角色和权限 - 多对多关系
-  Role.belongsToMany(Permission, { through: 'RolePermissions', timestamps: true });
-  Permission.belongsToMany(Role, { through: 'RolePermissions', timestamps: true });
-
-  // 部门自关联（上下级关系）
-  Department.belongsTo(Department, { foreignKey: 'parentId', as: 'parent' });
-  Department.hasMany(Department, { foreignKey: 'parentId', as: 'children' });
-
-  // 工作流关联
-  WorkflowInstance.belongsTo(User, { foreignKey: 'initiatorId', as: 'initiator' });
-  WorkflowNodeInstance.belongsTo(User, { foreignKey: 'assigneeId', as: 'assignee' });
-
-  // 执行文档模型内部关联设置
-  defineDocumentAssociations();
-
-  // 文档关联
-  Document.belongsTo(User, { foreignKey: 'uploaderId', as: 'uploader' });
-  DocumentShare.belongsTo(User, { foreignKey: 'sharedById', as: 'sharedBy' });
-  DocumentShare.belongsTo(User, { foreignKey: 'sharedToId', as: 'sharedToUser' });
-  DocumentShare.belongsTo(Department, { foreignKey: 'sharedToDeptId', as: 'sharedToDepartment' });
-  DocumentShare.belongsTo(Role, { foreignKey: 'sharedToRoleId', as: 'sharedToRole' });
-  DocumentVersion.belongsTo(User, { foreignKey: 'updaterId', as: 'updater' });
-
-  // 考勤关联
-  AttendanceRecord.belongsTo(User, { foreignKey: 'userId', as: 'user' });
-  LeaveRecord.belongsTo(User, { foreignKey: 'userId', as: 'user' });
-  LeaveRecord.belongsTo(User, { foreignKey: 'createdBy', as: 'creator' });
-  OvertimeRecord.belongsTo(User, { foreignKey: 'userId', as: 'user' });
-  OvertimeRecord.belongsTo(User, { foreignKey: 'createdBy', as: 'creator' });
-
-  // 公告关联
-  Announcement.belongsTo(User, { foreignKey: 'publisherId', as: 'publisher' });
-  AnnouncementRead.belongsTo(User, { foreignKey: 'userId', as: 'user' });
-
-  // 日程关联
-  Schedule.belongsTo(User, { foreignKey: 'creatorId', as: 'creator' });
-  ScheduleParticipant.belongsTo(User, { foreignKey: 'userId', as: 'user' });
-  RoomReservation.belongsTo(User, { foreignKey: 'userId', as: 'user' });
-
-  logger.info('模型关联关系设置完成');
-
-  // 添加所有模型到导出对象
   db.sequelize = sequelize;
   db.Sequelize = Sequelize;
 
-  // 基础模型
-  db.User = User;
-  db.Role = Role;
-  db.Department = Department;
-  db.Permission = Permission;
-
-  // 工作流模型
-  db.WorkflowDefinition = WorkflowDefinition;
-  db.WorkflowInstance = WorkflowInstance;
-  db.WorkflowNodeInstance = WorkflowNodeInstance;
-
-  // 文档模型
-  db.DocumentCategory = DocumentCategory;
-  db.Document = Document;
-  db.DocumentPermission = DocumentPermission;
-  db.Folder = Folder;
-  db.DocumentShare = DocumentShare;
-  db.DocumentVersion = DocumentVersion;
-
-  // 考勤模型
-  db.AttendanceRule = AttendanceRule;
-  db.DepartmentAttendanceRule = DepartmentAttendanceRule;
-  db.AttendanceRecord = AttendanceRecord;
-  db.LeaveRecord = LeaveRecord;
-  db.OvertimeRecord = OvertimeRecord;
-
-  // 公告模型
-  db.Announcement = Announcement;
-  db.AnnouncementTarget = AnnouncementTarget;
-  db.AnnouncementRead = AnnouncementRead;
-
-  // 日程模型
-  db.Schedule = Schedule;
-  db.ScheduleParticipant = ScheduleParticipant;
-  db.MeetingRoom = MeetingRoom;
-  db.RoomReservation = RoomReservation;
-
-  logger.info('所有模型加载完成');
-
-} catch (error) {
-  logger.error('加载模型时出错:', error);
-  throw error;
+  logger.info('数据库初始化完成，可用的模型:', Object.keys(db));
+  return db;
 }
 
-module.exports = db;
+// 导出一个函数，用于获取已初始化的数据库实例
+module.exports = async () => {
+  try {
+    logger.info('正在获取数据库实例...');
+    const db = await initializeDatabase();
+    logger.info('成功获取数据库实例，可用的模型:', Object.keys(db));
+    return db;
+  } catch (error) {
+    logger.error('获取数据库实例失败:', error);
+    throw error;
+  }
+};

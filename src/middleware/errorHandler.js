@@ -97,6 +97,9 @@ const errorHandler = (err, req, res, next) => {
     if (err.name === 'SequelizeValidationError') error = handleSequelizeValidationError(err);
     if (err.name === 'SequelizeUniqueConstraintError') error = handleSequelizeUniqueConstraintError(err);
     if (err.name === 'SequelizeForeignKeyConstraintError') error = handleSequelizeForeignKeyConstraintError(err);
+    if (err.name === 'SequelizeError' || err.name === 'SequelizeDatabaseError') {
+      error = new AppError(err.message || '数据库操作失败', 500);
+    }
 
     // 处理JWT错误
     if (err.name === 'JsonWebTokenError') error = handleJWTError();

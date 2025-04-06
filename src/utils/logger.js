@@ -3,6 +3,7 @@ const { createLogger, format, transports } = winston;
 const { combine, timestamp, printf, colorize, json } = format;
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 // 创建日志目录（如果不存在）
 const logDir = process.env.LOG_DIR || 'logs';
@@ -33,6 +34,7 @@ const logger = createLogger({
       filename: path.join(logDir, 'combined.log'),
       maxsize: 5242880, // 5MB
       maxFiles: 5,
+      encoding: 'utf8'
     }),
     // 单独写入错误日志到 error.log
     new transports.File({ 
@@ -40,6 +42,7 @@ const logger = createLogger({
       level: 'error',
       maxsize: 5242880, // 5MB
       maxFiles: 5,
+      encoding: 'utf8'
     }),
   ],
   exceptionHandlers: [
@@ -47,6 +50,7 @@ const logger = createLogger({
       filename: path.join(logDir, 'exceptions.log'),
       maxsize: 5242880, // 5MB
       maxFiles: 5,
+      encoding: 'utf8'
     })
   ],
   rejectionHandlers: [
@@ -54,19 +58,25 @@ const logger = createLogger({
       filename: path.join(logDir, 'rejections.log'),
       maxsize: 5242880, // 5MB
       maxFiles: 5,
+      encoding: 'utf8'
     })
   ]
 });
 
 // 在开发环境中，同时输出到控制台
 if (process.env.NODE_ENV !== 'production') {
-  logger.add(new transports.Console({
+  // 创建简单的控制台传输
+  const consoleTransport = new transports.Console({
     format: combine(
       colorize(),
       timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-      consoleFormat
+      printf(({ level, message, timestamp }) => {
+        return `[${timestamp}] [${level}] ${message}`;
+      })
     )
-  }));
+  });
+  
+  logger.add(consoleTransport);
 }
 
 // 请求日志中间件

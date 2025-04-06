@@ -14,6 +14,7 @@ const { Op } = require('sequelize');
 const { AppError } = require('../middleware/errorHandler');
 const moment = require('moment');
 const sequelize = require('sequelize');
+const logger = require('../utils/logger');
 
 /**
  * 获取所有工作流定义
@@ -74,23 +75,34 @@ exports.getAllWorkflowDefinitions = async (req, res, next) => {
 /**
  * 根据ID获取工作流定义
  */
-exports.getWorkflowDefinitionById = async (req, res, next) => {
+exports.getWorkflowDefinitionById = async (req, res) => {
   try {
-    const workflowId = req.params.id;
-    
-    const workflow = await WorkflowDefinition.findByPk(workflowId);
-    
-    if (!workflow) {
-      return next(new AppError('工作流定义不存在', 404));
+    const { id } = req.params;
+    const definition = await WorkflowDefinition.findByPk(id, {
+      include: [{
+        model: WorkflowInstance,
+        as: 'workflowInstances',
+        attributes: ['id', 'status', 'startTime', 'endTime']
+      }]
+    });
+
+    if (!definition) {
+      return res.status(404).json({
+        status: 'error',
+        message: '工作流定义不存在'
+      });
     }
-    
-    res.status(200).json({
+
+    res.json({
       status: 'success',
-      message: '获取工作流定义成功',
-      data: workflow
+      data: definition
     });
   } catch (error) {
-    next(error);
+    logger.error('获取工作流定义详情失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
   }
 };
 
@@ -102,15 +114,72 @@ exports.createWorkflowDefinition = async (req, res, next) => {
     const { 
       name, 
       code, 
+      category,
       description, 
-      nodes, 
-      formSchema,
+      nodeConfig, 
+      formConfig,
       status
     } = req.body;
     
+    logger.info('开始创建工作流定义', { name, code, category });
+    
     // 验证必填字段
-    if (!name || !code || !nodes || !Array.isArray(nodes) || nodes.length === 0) {
-      return next(new AppError('工作流名称、编码和节点定义为必填项', 400));
+    if (!name || !code || !category || !nodeConfig) {
+      logger.warn('工作流定义缺少必填字段', { name, code, category });
+      return res.status(400).json({
+        status: 'error',
+        message: '工作流名称、编码、类别和节点定义为必填项'
+      });
+    }
+    
+    // 验证nodeConfig的结构
+    let parsedNodeConfig;
+    try {
+      parsedNodeConfig = typeof nodeConfig === 'string' ? JSON.parse(nodeConfig) : nodeConfig;
+    } catch (error) {
+      logger.warn('工作流节点配置解析失败', { error: error.message });
+      return res.status(400).json({
+        status: 'error',
+        message: '工作流节点配置格式无效'
+      });
+    }
+
+    if (!parsedNodeConfig.nodes || !Array.isArray(parsedNodeConfig.nodes) || parsedNodeConfig.nodes.length === 0) {
+      logger.warn('工作流节点配置无效', { nodeConfig: parsedNodeConfig });
+      return res.status(400).json({
+        status: 'error',
+        message: '工作流节点配置无效，必须包含至少一个节点'
+      });
+    }
+
+    // 验证每个节点的必要属性
+    for (const node of parsedNodeConfig.nodes) {
+      if (!node.id || !node.type || !node.name) {
+        logger.warn('工作流节点缺少必要属性', { node });
+        return res.status(400).json({
+          status: 'error',
+          message: '工作流节点缺少必要属性（id、type、name）'
+        });
+      }
+    }
+
+    if (!parsedNodeConfig.edges || !Array.isArray(parsedNodeConfig.edges)) {
+      logger.warn('工作流边配置无效', { nodeConfig: parsedNodeConfig });
+      return res.status(400).json({
+        status: 'error',
+        message: '工作流边配置无效'
+      });
+    }
+
+    // 验证每个边的必要属性
+    for (const edge of parsedNodeConfig.edges) {
+      if (!edge.source || !edge.target) {
+        logger.warn('工作流边缺少必要属性', { edge });
+        return res.status(400).json({
+          status: 'error',
+          message: '工作流边缺少必要属性（source、target）'
+        });
+      }
     }
     
     // 检查工作流编码是否已存在
@@ -119,19 +188,26 @@ exports.createWorkflowDefinition = async (req, res, next) => {
     });
     
     if (existingWorkflow) {
-      return next(new AppError('工作流编码已存在', 400));
+      logger.warn('工作流编码已存在', { code });
+      return res.status(400).json({
+        status: 'error',
+        message: '工作流编码已存在'
+      });
     }
     
     // 创建工作流定义
     const newWorkflow = await WorkflowDefinition.create({
       name,
       code,
+      category,
       description,
-      nodes: JSON.stringify(nodes),
-      formSchema: formSchema ? JSON.stringify(formSchema) : null,
+      nodeConfig: parsedNodeConfig,
+      formConfig: formConfig || null,
       status: status || 'active',
-      createdBy: req.user.id
+      createdBy: req.user ? req.user.id : null
     });
+    
+    logger.info('工作流定义创建成功', { id: newWorkflow.id });
     
     res.status(201).json({
       status: 'success',
@@ -139,7 +215,16 @@ exports.createWorkflowDefinition = async (req, res, next) => {
       data: newWorkflow
     });
   } catch (error) {
-    next(error);
+    logger.error('创建工作流定义失败', { 
+      error: error.message, 
+      stack: error.stack,
+      body: req.body 
+    });
+    res.status(500).json({
+      status: 'error',
+      message: '服务器内部错误',
+      error: error.message
+    });
   }
 };
 
@@ -306,8 +391,9 @@ exports.getMyPendingApprovals = async (req, res, next) => {
       include: [
         { 
           model: WorkflowInstance,
+          as: 'workflowInstance',
           include: [
-            { model: WorkflowDefinition, attributes: ['id', 'name', 'code'] },
+            { model: WorkflowDefinition, as: 'workflowDefinition', attributes: ['id', 'name', 'code'] },
             { model: User, as: 'initiator', attributes: ['id', 'username', 'name'] }
           ]
         }
@@ -321,10 +407,9 @@ exports.getMyPendingApprovals = async (req, res, next) => {
     const totalPages = Math.ceil(count / limit);
     
     res.status(200).json({
-      status: 'success',
-      message: '获取待审批工作流节点成功',
-      data: rows,
-      pagination: {
+      success: true,
+      data: {
+        items: rows,
         total: count,
         page,
         limit,
@@ -337,112 +422,159 @@ exports.getMyPendingApprovals = async (req, res, next) => {
 };
 
 /**
- * 创建工作流实例（提交申请）
+ * 创建工作流实例
  */
 exports.createWorkflowInstance = async (req, res, next) => {
+  const transaction = await WorkflowDefinition.sequelize.transaction();
+  
   try {
-    const { 
-      workflowDefinitionId, 
-      title,
-      data
-    } = req.body;
-    
+    const { workflowDefinitionId, title, formData } = req.body;
+
     // 验证必填字段
-    if (!workflowDefinitionId || !title || !data) {
-      return next(new AppError('工作流定义ID、标题和数据为必填项', 400));
+    if (!workflowDefinitionId || !title || !formData) {
+      return next(new AppError('工作流定义ID、标题和表单数据为必填项', 400));
     }
-    
+
+    // 验证formData是否为有效的JSON对象
+    let parsedFormData;
+    try {
+      parsedFormData = typeof formData === 'string' ? JSON.parse(formData) : formData;
+      if (typeof parsedFormData !== 'object' || parsedFormData === null) {
+        throw new Error('表单数据必须是一个对象');
+      }
+    } catch (error) {
+      return next(new AppError('表单数据格式无效：' + error.message, 400));
+    }
+
     // 查找工作流定义
-    const workflowDefinition = await WorkflowDefinition.findByPk(workflowDefinitionId);
-    
+    const workflowDefinition = await WorkflowDefinition.findByPk(workflowDefinitionId, {
+      include: [{
+        model: WorkflowInstance,
+        as: 'workflowInstances'
+      }]
+    });
+
     if (!workflowDefinition) {
       return next(new AppError('工作流定义不存在', 404));
     }
-    
+
     if (workflowDefinition.status !== 'active') {
-      return next(new AppError('工作流定义未激活，无法创建实例', 400));
+      return next(new AppError('工作流定义未激活', 400));
     }
-    
-    // 解析节点定义
-    const nodes = JSON.parse(workflowDefinition.nodes);
-    
-    if (!nodes || !Array.isArray(nodes) || nodes.length === 0) {
-      return next(new AppError('工作流节点定义无效', 400));
+
+    // 解析节点配置
+    let nodeConfig;
+    try {
+      nodeConfig = typeof workflowDefinition.nodeConfig === 'string' 
+        ? JSON.parse(workflowDefinition.nodeConfig)
+        : workflowDefinition.nodeConfig;
+    } catch (error) {
+      return next(new AppError('工作流节点配置解析失败', 400));
     }
-    
-    // 找到第一个节点
-    const firstNode = nodes[0];
-    
+
+    if (!nodeConfig || !nodeConfig.nodes || !nodeConfig.nodes.length) {
+      return next(new AppError('工作流节点配置无效', 400));
+    }
+
+    // 验证formData是否符合formConfig配置
+    let formConfig;
+    try {
+      formConfig = typeof workflowDefinition.formConfig === 'string' 
+        ? JSON.parse(workflowDefinition.formConfig)
+        : workflowDefinition.formConfig;
+    } catch (error) {
+      return next(new AppError('表单配置解析失败', 400));
+    }
+
+    if (!formConfig || !formConfig.properties) {
+      return next(new AppError('表单配置无效', 400));
+    }
+
+    // 验证必填字段
+    const requiredFields = Object.entries(formConfig.properties)
+      .filter(([_, field]) => field.required)
+      .map(([name]) => name);
+
+    const missingFields = requiredFields.filter(field => !parsedFormData.hasOwnProperty(field));
+    if (missingFields.length > 0) {
+      return next(new AppError(`缺少必填字段: ${missingFields.join(', ')}`, 400));
+    }
+
     // 创建工作流实例
-    const instance = await WorkflowInstance.create({
+    const workflowInstance = await WorkflowInstance.create({
       workflowDefinitionId,
-      initiatorId: req.user.id,
       title,
-      data: JSON.stringify(data),
-      currentNodeIndex: 0,
-      status: 'processing'
-    });
-    
-    // 确定节点的审批人
+      formData: parsedFormData,
+      currentNode: nodeConfig.nodes[0].id,
+      status: 'processing',
+      initiatorId: req.user.id,
+      startTime: new Date()
+    }, { transaction });
+
+    // 创建第一个节点实例
+    const firstNode = nodeConfig.nodes[0];
     let assigneeId = null;
-    
-    if (firstNode.assigneeType === 'user' && firstNode.assigneeId) {
+
+    // 根据节点配置确定审批人
+    if (firstNode.type === 'start' || firstNode.type === 'end') {
+      // 开始和结束节点不需要审批人
+      assigneeId = null;
+    } else if (firstNode.assigneeType === 'user') {
       assigneeId = firstNode.assigneeId;
-    } else if (firstNode.assigneeType === 'role' && firstNode.assigneeId) {
-      // 查找具有该角色的第一个用户
-      const roleUser = await User.findOne({
-        include: [
-          {
-            model: Role,
-            where: { id: firstNode.assigneeId }
-          }
-        ]
-      });
-      
-      if (roleUser) {
-        assigneeId = roleUser.id;
+    } else if (firstNode.assigneeType === 'role') {
+      const role = await Role.findByPk(firstNode.assigneeId);
+      if (role) {
+        const users = await role.getUsers();
+        if (users.length > 0) {
+          assigneeId = users[0].id;
+        }
       }
-    } else if (firstNode.assigneeType === 'department' && firstNode.assigneeId) {
-      // 查找部门主管
+    } else if (firstNode.assigneeType === 'department') {
       const department = await Department.findByPk(firstNode.assigneeId);
-      
-      if (department && department.managerId) {
-        assigneeId = department.managerId;
+      if (department) {
+        const users = await department.getUsers();
+        if (users.length > 0) {
+          assigneeId = users[0].id;
+        }
       }
-    } else if (firstNode.assigneeType === 'initiatorManager') {
-      // 查找申请人的部门主管
-      const initiator = await User.findByPk(req.user.id, {
-        include: [{ model: Department, as: 'department' }]
-      });
-      
-      if (initiator && initiator.department && initiator.department.managerId) {
-        assigneeId = initiator.department.managerId;
-      }
+    } else if (firstNode.assigneeType === 'initiator') {
+      assigneeId = req.user.id;
     }
-    
+
     // 创建节点实例
-    const nodeInstance = await WorkflowNodeInstance.create({
-      workflowInstanceId: instance.id,
-      nodeIndex: 0,
+    await WorkflowNodeInstance.create({
+      workflowInstanceId: workflowInstance.id,
+      workflowDefinitionId: workflowDefinitionId,
+      nodeId: firstNode.id,
       nodeName: firstNode.name,
+      nodeType: firstNode.type,
+      assigneeType: firstNode.type === 'start' || firstNode.type === 'end' ? null : firstNode.assigneeType,
       assigneeId,
-      status: 'pending'
-    });
-    
+      status: firstNode.type === 'start' ? 'completed' : 'pending',
+      startTime: new Date(),
+      order: 0
+    }, { transaction });
+
+    // 提交事务
+    await transaction.commit();
+
     // 返回创建的工作流实例
-    const result = await WorkflowInstance.findByPk(instance.id, {
-      include: [
-        { model: WorkflowDefinition, attributes: ['id', 'name', 'code'] },
-        { model: User, as: 'initiator', attributes: ['id', 'username', 'name'] }
-      ]
+    const createdInstance = await WorkflowInstance.findByPk(workflowInstance.id, {
+      include: [{
+        model: WorkflowDefinition,
+        as: 'workflowDefinition',
+        attributes: ['name', 'code', 'category']
+      }]
     });
-    
+
     res.status(201).json({
       status: 'success',
       message: '工作流实例创建成功',
-      data: result
+      data: createdInstance
     });
   } catch (error) {
+    // 回滚事务
+    await transaction.rollback();
     next(error);
   }
 };
@@ -606,13 +738,13 @@ exports.approveWorkflowNode = async (req, res, next) => {
 /**
  * 获取工作流实例详情
  */
-exports.getWorkflowInstanceById = async (req, res, next) => {
+exports.getWorkflowInstanceById = async (req, res) => {
   try {
-    const instanceId = req.params.id;
+    const { id } = req.params;
     const userId = req.user.id;
     
     // 查询实例
-    const instance = await WorkflowInstance.findByPk(instanceId, {
+    const instance = await WorkflowInstance.findByPk(id, {
       include: [
         { 
           model: Workflow, 
@@ -744,116 +876,51 @@ exports.getWorkflowInstanceById = async (req, res, next) => {
 /**
  * 获取待办任务列表
  */
-exports.getMyTasks = async (req, res, next) => {
+exports.getTodoTasks = async (req, res) => {
   try {
-    const userId = req.user.id;
-    
-    // 查询参数
-    const status = req.query.status || 'pending';
-    const workflowId = req.query.workflowId;
-    const startDate = req.query.startDate;
-    const endDate = req.query.endDate;
-    const search = req.query.search || '';
-    
-    // 分页参数
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const { userId } = req.user;
+    const { page = 1, limit = 10 } = req.query;
     const offset = (page - 1) * limit;
-    
-    // 构建查询条件
-    const whereCondition = {};
-    
-    // 只查询指派给当前用户的任务
-    whereCondition.assignees = {
-      [Op.contains]: [userId]
-    };
-    
-    if (status !== 'all') {
-      whereCondition.status = status;
-    }
-    
-    if (startDate && endDate) {
-      whereCondition.createTime = {
-        [Op.between]: [
-          moment(startDate).startOf('day').toDate(),
-          moment(endDate).endOf('day').toDate()
-        ]
-      };
-    }
-    
-    if (search) {
-      whereCondition.title = {
-        [Op.like]: `%${search}%`
-      };
-    }
-    
-    // 工作流实例查询条件
-    const instanceWhereCondition = {};
-    
-    if (workflowId) {
-      instanceWhereCondition.workflowId = workflowId;
-    }
-    
-    // 执行查询
-    const { count, rows } = await WorkflowTask.findAndCountAll({
-      where: whereCondition,
-      include: [
-        {
-          model: WorkflowInstance,
-          as: 'instance',
-          where: instanceWhereCondition,
-          include: [
-            { 
-              model: Workflow, 
-              as: 'workflow',
-              attributes: ['id', 'name', 'type']
-            },
-            { 
-              model: User, 
-              as: 'initiator', 
-              attributes: ['id', 'username', 'name'] 
-            }
-          ]
-        }
-      ],
-      order: [
-        ['deadline', 'ASC', 'NULLS LAST'],
-        ['createTime', 'DESC']
-      ],
+
+    const tasks = await WorkflowNodeInstance.findAndCountAll({
+      where: {
+        assigneeId: userId,
+        status: 'pending'
+      },
+      include: [{
+        model: WorkflowInstance,
+        as: 'workflowInstance',
+        required: false,
+        include: [{
+          model: WorkflowDefinition,
+          as: 'definition',
+          required: false,
+          attributes: ['name', 'code', 'category']
+        }, {
+          model: User,
+          as: 'initiator',
+          required: false,
+          attributes: ['id', 'username', 'name']
+        }]
+      }],
+      order: [['createdAt', 'DESC']],
       limit,
       offset
     });
-    
-    // 计算总页数
-    const totalPages = Math.ceil(count / limit);
-    
-    // 获取逾期任务数量
-    const overdueCount = await WorkflowTask.count({
-      where: {
-        assignees: {
-          [Op.contains]: [userId]
-        },
-        status: 'pending',
-        deadline: {
-          [Op.lt]: new Date()
-        }
-      }
-    });
-    
-    res.status(200).json({
+
+    res.json({
       status: 'success',
-      message: '获取待办任务列表成功',
-      data: rows,
-      overdueCount,
-      pagination: {
-        total: count,
-        page,
-        limit,
-        totalPages
+      data: {
+        total: tasks.count,
+        items: tasks.rows
       }
     });
   } catch (error) {
-    next(error);
+    logger.error('获取待办任务列表失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
   }
 };
 
@@ -1133,65 +1200,84 @@ exports.processTask = async (req, res, next) => {
 /**
  * 取消工作流实例
  */
-exports.cancelWorkflowInstance = async (req, res, next) => {
+exports.cancelWorkflowInstance = async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
-    const instanceId = req.params.id;
-    const userId = req.user.id;
-    const { reason } = req.body;
-    
-    // 查询实例
-    const instance = await WorkflowInstance.findByPk(instanceId, {
-      include: [
-        { model: WorkflowTask, as: 'tasks', where: { status: 'pending' }, required: false }
-      ]
+    const { id } = req.params;
+    const { userId } = req.user;
+
+    const instance = await WorkflowInstance.findByPk(id, {
+      include: [{
+        model: WorkflowNodeInstance,
+        as: 'nodeInstances',
+        where: {
+          status: 'pending'
+        },
+        required: false
+      }],
+      transaction
     });
-    
+
     if (!instance) {
-      return next(new AppError('工作流实例不存在', 404));
+      await transaction.rollback();
+      return res.status(404).json({
+        status: 'error',
+        message: '工作流实例不存在'
+      });
     }
-    
-    // 检查实例状态
-    if (instance.status !== 'running') {
-      return next(new AppError(`该工作流实例已${instance.status === 'completed' ? '完成' : instance.status === 'rejected' ? '拒绝' : '取消'}，无法再次取消`, 400));
+
+    if (instance.initiatorId !== userId) {
+      await transaction.rollback();
+      return res.status(403).json({
+        status: 'error',
+        message: '只有发起人可以取消工作流'
+      });
     }
-    
-    // 检查权限
-    const userRoles = req.user.roles || [];
-    const isAdmin = userRoles.includes('admin');
-    
-    if (!isAdmin && instance.initiatorId !== userId) {
-      return next(new AppError('您不是该工作流实例的发起人，无权取消', 403));
-    }
-    
-    // 事务处理
-    await sequelize.transaction(async (t) => {
-      // 更新所有未完成的任务
-      for (const task of instance.tasks) {
-        await task.update({
+
+    // 更新所有待处理的节点实例状态为已取消
+    if (instance.nodeInstances && instance.nodeInstances.length > 0) {
+      await Promise.all(instance.nodeInstances.map(nodeInstance =>
+        nodeInstance.update({ 
           status: 'cancelled',
-          processTime: new Date(),
-          completeTime: new Date(),
-          processResult: 'cancelled',
-          comment: `流程被${isAdmin ? '管理员' : '发起人'}取消：${reason || '无原因'}`
-        }, { transaction: t });
-      }
-      
-      // 更新实例状态
-      await instance.update({
-        status: 'cancelled',
-        endTime: new Date(),
-        result: 'cancelled',
-        cancelReason: reason || null,
-        cancelledBy: userId
-      }, { transaction: t });
+          endTime: new Date()
+        }, { transaction })
+      ));
+    }
+
+    // 更新工作流实例状态
+    await instance.update({
+      status: 'cancelled',
+      endTime: new Date()
+    }, { transaction });
+
+    await transaction.commit();
+
+    // 重新查询完整的实例信息
+    const updatedInstance = await WorkflowInstance.findByPk(id, {
+      include: [{
+        model: WorkflowDefinition,
+        as: 'definition',
+        required: false,
+        attributes: ['name', 'code', 'category']
+      }, {
+        model: WorkflowNodeInstance,
+        as: 'nodeInstances',
+        required: false
+      }]
     });
-    
-    res.status(200).json({
+
+    res.json({
       status: 'success',
-      message: '工作流实例取消成功'
+      message: '工作流实例已取消',
+      data: updatedInstance
     });
   } catch (error) {
-    next(error);
+    await transaction.rollback();
+    logger.error('取消工作流实例失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
   }
 };
 
@@ -1231,4 +1317,217 @@ function evalCondition(condition, formData, variables) {
     console.error('条件解析错误:', err);
     return false;
   }
-} 
+}
+
+// 获取工作流实例列表
+exports.getWorkflowInstances = async (req, res) => {
+  try {
+    const { workflowDefinitionId, status, page = 1, limit = 10 } = req.query;
+    const offset = (page - 1) * limit;
+
+    const where = {};
+    if (workflowDefinitionId) {
+      where.workflowDefinitionId = workflowDefinitionId;
+    }
+    if (status) {
+      where.status = status;
+    }
+
+    const instances = await WorkflowInstance.findAndCountAll({
+      where,
+      include: [{
+        model: WorkflowDefinition,
+        as: 'definition',
+        required: false,
+        attributes: ['name', 'code', 'category']
+      }, {
+        model: User,
+        as: 'initiator',
+        required: false,
+        attributes: ['id', 'username', 'name']
+      }],
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset
+    });
+
+    res.json({
+      status: 'success',
+      data: {
+        total: instances.count,
+        items: instances.rows
+      }
+    });
+  } catch (error) {
+    logger.error('获取工作流实例列表失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+};
+
+// 获取工作流实例详情
+exports.getWorkflowInstanceById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const instance = await WorkflowInstance.findByPk(id, {
+      include: [{
+        model: WorkflowDefinition,
+        as: 'definition',
+        required: false,
+        attributes: ['name', 'code', 'category']
+      }, {
+        model: WorkflowNodeInstance,
+        as: 'nodeInstances',
+        include: [{
+          model: User,
+          as: 'assignee',
+          required: false,
+          attributes: ['id', 'username', 'name']
+        }]
+      }, {
+        model: User,
+        as: 'initiator',
+        required: false,
+        attributes: ['id', 'username', 'name']
+      }]
+    });
+
+    if (!instance) {
+      return res.status(404).json({
+        status: 'error',
+        message: '工作流实例不存在'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      data: instance
+    });
+  } catch (error) {
+    logger.error('获取工作流实例详情失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+};
+
+// 启动工作流实例
+exports.startWorkflowInstance = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { workflowDefinitionId, title, formData, businessKey } = req.body;
+    const { userId } = req.user;
+
+    // 获取工作流定义
+    const definition = await WorkflowDefinition.findByPk(workflowDefinitionId);
+    if (!definition) {
+      await transaction.rollback();
+      return res.status(404).json({
+        status: 'error',
+        message: '工作流定义不存在'
+      });
+    }
+
+    // 解析节点配置
+    let nodeConfig;
+    try {
+      nodeConfig = typeof definition.nodeConfig === 'string' 
+        ? JSON.parse(definition.nodeConfig)
+        : definition.nodeConfig;
+    } catch (error) {
+      return next(new AppError('工作流节点配置解析失败', 400));
+    }
+
+    if (!nodeConfig || !nodeConfig.nodes || !nodeConfig.nodes.length) {
+      return next(new AppError('工作流节点配置无效', 400));
+    }
+
+    // 创建工作流实例
+    const instance = await WorkflowInstance.create({
+      workflowDefinitionId,
+      title,
+      formData,
+      currentNode: nodeConfig.nodes[0].id,
+      status: 'processing',
+      startTime: new Date(),
+      initiatorId: userId,
+      priority: 'medium'
+    }, { transaction });
+
+    // 创建第一个节点实例
+    const firstNode = nodeConfig.nodes[0];
+    let assigneeId = null;
+
+    // 根据节点配置确定审批人
+    if (firstNode.type === 'start' || firstNode.type === 'end') {
+      // 开始和结束节点不需要审批人
+      assigneeId = null;
+    } else if (firstNode.assigneeType === 'user') {
+      assigneeId = firstNode.assigneeId;
+    } else if (firstNode.assigneeType === 'role') {
+      const role = await Role.findByPk(firstNode.assigneeId);
+      if (role) {
+        const users = await role.getUsers();
+        if (users.length > 0) {
+          assigneeId = users[0].id;
+        }
+      }
+    } else if (firstNode.assigneeType === 'department') {
+      const department = await Department.findByPk(firstNode.assigneeId);
+      if (department) {
+        const users = await department.getUsers();
+        if (users.length > 0) {
+          assigneeId = users[0].id;
+        }
+      }
+    } else if (firstNode.assigneeType === 'initiator') {
+      assigneeId = userId;
+    }
+
+    // 创建节点实例
+    await WorkflowNodeInstance.create({
+      workflowInstanceId: instance.id,
+      workflowDefinitionId: workflowDefinitionId,
+      nodeId: firstNode.id,
+      nodeName: firstNode.name,
+      nodeType: firstNode.type,
+      assigneeType: firstNode.type === 'start' || firstNode.type === 'end' ? null : firstNode.assigneeType,
+      assigneeId,
+      status: firstNode.type === 'start' ? 'completed' : 'pending',
+      startTime: new Date(),
+      order: 0
+    }, { transaction });
+
+    // 更新工作流实例的当前节点
+    await instance.update({
+      currentNode: firstNode.id
+    }, { transaction });
+
+    await transaction.commit();
+
+    // 查询完整的实例信息
+    const completeInstance = await WorkflowInstance.findByPk(instance.id, {
+      include: [{
+        model: WorkflowDefinition,
+        as: 'definition',
+        attributes: ['name', 'code', 'category']
+      }]
+    });
+
+    res.json({
+      status: 'success',
+      message: '工作流实例创建成功',
+      data: completeInstance
+    });
+  } catch (error) {
+    await transaction.rollback();
+    logger.error('启动工作流实例失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+}; 

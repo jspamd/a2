@@ -7,6 +7,18 @@ const dotenv = require('dotenv');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const fs = require('fs');
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
+const { Sequelize } = require('sequelize');
+const iconv = require('iconv-lite');
+const createAdminUser = require('./seeders/admin-user');
+
+// 设置 Node.js 进程的编码
+if (process.platform === 'win32') {
+  // 在 Windows 上设置控制台编码
+  require('child_process').execSync('chcp 65001', { stdio: 'ignore' });
+}
 
 // 环境变量配置
 dotenv.config();
@@ -18,29 +30,97 @@ const { monitorMiddleware } = require('./utils/monitor');
 // 检查依赖
 const { checkAndInstallDependencies } = require('./utils/checkDependencies');
 
-// 数据库连接
-const dbConnect = require('./config/database');
+// 数据库配置
+const dbConfig = require('./config/database');
 
 // 创建 Express 应用
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT, 10) || 3002; // 显式转换 PORT 为数字类型
 
-// 基础中间件
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// 检查并关闭占用端口的进程
+async function killProcessOnPort(port) {
+  // 输入校验
+  if (typeof port !== 'number' || port <= 0 || !Number.isInteger(port)) {
+    throw new Error(`Invalid port: ${port}. Port must be a positive integer.`);
+  }
+
+  try {
+    if (process.platform === 'win32') {
+      // Windows系统
+      const { stdout, stderr } = await execPromise(`netstat -ano | findstr :${port}`);
+      if (stderr) {
+        throw new Error(`netstat 命令执行失败: ${stderr}`);
+      }
+      if (stdout) {
+        const lines = stdout.split('\n');
+        const pids = [];
+        for (const line of lines) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length > 4) {
+            const pid = parts[parts.length - 1];
+            if (pid && pid !== '0' && pid !== process.pid.toString()) {
+              pids.push(pid);
+            }
+          }
+        }
+        if (pids.length > 0) {
+          // 批量终止进程
+          const command = `taskkill /F /PID ${pids.join(' /PID ')}`;
+          await execPromise(command);
+          logger.info(`已终止占用端口 ${port} 的进程: ${pids.join(', ')}`);
+        }
+      }
+    } else {
+      // Unix/Linux/macOS系统
+      const { stdout, stderr } = await execPromise(`lsof -i :${escapeShellArg(port.toString())} -t`);
+      if (stderr) {
+        throw new Error(`lsof 命令执行失败: ${stderr}`);
+      }
+      if (stdout) {
+        const pids = stdout.split('\n').filter(Boolean).filter(pid => pid !== '0' && pid !== process.pid.toString());
+        if (pids.length > 0) {
+          // 批量终止进程
+          const command = `kill -9 ${pids.join(' ')}`;
+          await execPromise(command);
+          logger.info(`已终止占用端口 ${port} 的进程: ${pids.join(', ')}`);
+        }
+      }
+    }
+  } catch (error) {
+    // 异常处理
+    if (!error.message.includes('没有找到任何任务') &&
+        !error.message.includes('No such process')) {
+      logger.error(`检查端口占用时发生错误: ${error.message}`);
+    }
+  }
+}
+
+// 辅助函数：转义命令行参数，防止命令注入
+function escapeShellArg(arg) {
+  return `"${arg.replace(/"/g, '\\"')}"`;
+}
+
+// 配置中间件
 app.use(cors());
 app.use(helmet());
 app.use(compression());
-app.use(requestLogger);
-app.use(monitorMiddleware);
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
 
-// 限速配置
+// 配置静态文件服务
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// 配置API速率限制
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15分钟
-  max: 1000, // 每个IP限制1000次请求
-  message: { status: 'error', message: '请求过于频繁，请稍后再试' }
+  max: 100, // 每个IP最多100个请求
+  message: {
+    status: 'error',
+    message: '请求过于频繁，请稍后再试'
+  }
 });
-app.use('/api/', limiter);
+app.use('/api', limiter);
 
 // 创建必要的目录
 const createRequiredDirectories = async () => {
@@ -64,137 +144,101 @@ const createRequiredDirectories = async () => {
   }
 };
 
-// 启动应用
-async function startApp() {
-  let server;
+// 初始化数据库
+const initializeDatabase = async () => {
   try {
-    logger.info('正在启动应用...');
-    
-    // 创建必要的目录
-    await createRequiredDirectories();
-    
-    // 检查依赖
-    logger.info('正在检查依赖...');
-    const dependenciesReady = await checkAndInstallDependencies();
-    if (!dependenciesReady) {
-      throw new Error('缺少必要依赖，无法启动应用');
-    }
-    
-    // 连接数据库
-    logger.info('正在连接数据库...');
-    await dbConnect();
+    logger.info('正在初始化数据库...');
+    const models = await require('./models')();
+
+    // 测试数据库连接
+    await models.sequelize.authenticate();
     logger.info('数据库连接成功');
-    
-    // 加载路由
-    logger.info('正在加载路由...');
-    const authRoutes = require('./routes/auth.routes');
-    const userRoutes = require('./routes/user.routes');
-    const roleRoutes = require('./routes/role.routes');
-    const departmentRoutes = require('./routes/department.routes');
-    const announcementRoutes = require('./routes/announcement.routes');
-    const scheduleRoutes = require('./routes/schedule.routes');
-    const workflowRoutes = require('./routes/workflow.routes');
-    const monitorRoutes = require('./routes/monitor.routes');
-    const documentRoutes = require('./routes/document.routes');
-    
-    // 注册路由
-    app.use('/api/auth', authRoutes);
-    app.use('/api/users', userRoutes);
-    app.use('/api/roles', roleRoutes);
-    app.use('/api/departments', departmentRoutes);
-    app.use('/api/announcements', announcementRoutes);
-    app.use('/api/schedules', scheduleRoutes);
-    app.use('/api/workflows', workflowRoutes);
-    app.use('/api/monitor', monitorRoutes);
-    app.use('/api/documents', documentRoutes);
-    
-    // 404错误处理
-    app.use((req, res, next) => {
-      logger.warn('未找到请求的资源', { url: req.originalUrl });
-      res.status(404).json({
-        status: 'error',
-        message: '未找到请求的资源'
-      });
-    });
-    
-    // 错误处理中间件
-    const { errorHandler } = require('./middleware/errorHandler');
-    app.use(errorHandler);
-    
-    // 启动服务器
-    server = app.listen(PORT, () => {
-      logger.info(`服务器运行在端口 ${PORT}`);
-      console.log(`服务器运行在端口 ${PORT}`);
-    });
-    
-    // 处理服务器错误
-    server.on('error', (error) => {
-      logger.error('服务器错误', { error: error.message });
-      if (error.code === 'EADDRINUSE') {
-        logger.error(`端口 ${PORT} 已被占用`);
-      }
-      gracefulShutdown(error);
-    });
-    
+
+    // 同步模型
+    await models.sequelize.sync({ alter: true });
+    logger.info('数据库模型同步完成');
+
+    // 创建管理员用户
+    await createAdminUser();
+
+    return models;
   } catch (error) {
-    logger.error('启动应用失败', { error: error.message, stack: error.stack });
-    console.error('启动应用失败:', error);
+    logger.error('数据库初始化失败:', error);
+    throw error;
+  }
+};
+
+// 加载路由
+app.use('/api/auth', require('./routes/auth.routes'));
+app.use('/api/users', require('./routes/user.routes'));
+app.use('/api/workflows', require('./routes/workflow.routes'));
+
+// 404错误处理
+app.use((req, res) => {
+  logger.warn('未找到路由:', req.method, req.url);
+  res.status(404).json({
+    status: 'error',
+    message: '未找到请求的资源'
+  });
+});
+
+// 错误处理中间件
+app.use((err, req, res, next) => {
+  logger.error('服务器错误:', err);
+  res.status(err.status || 500).json({
+    status: 'error',
+    message: process.env.NODE_ENV === 'development' ? err.message : '服务器内部错误'
+  });
+});
+
+// 启动应用
+const startApp = async () => {
+  try {
+    // 检查依赖
+    checkAndInstallDependencies();
+
+    // 创建必要的目录
+    await createRequiredDirectories(); // 确保异步操作完成
+
+    // 初始化数据库
+    const models = await initializeDatabase();
+
+    // 检查端口占用
+    await killProcessOnPort(PORT);
+
+    // 启动服务器
+    const server = app.listen(PORT, () => {
+      logger.info(`服务器运行在端口 ${PORT}`);
+    });
+
+    // 优雅关闭
+    await setupGracefulShutdown(server);
+  } catch (error) {
+    logger.error('启动应用失败:', error);
     process.exit(1);
   }
-  
-  return server;
-}
+};
 
-// 优雅关闭函数
-async function gracefulShutdown(error) {
-  logger.info('开始优雅关闭服务...');
-  
-  try {
-    if (server) {
-      await new Promise((resolve) => {
-        server.close(resolve);
-      });
-      logger.info('HTTP服务器已关闭');
-    }
-    
-    // 关闭数据库连接
-    if (dbConnect.sequelize) {
-      await dbConnect.sequelize.close();
-      logger.info('数据库连接已关闭');
-    }
-    
-  } catch (shutdownError) {
-    logger.error('关闭服务时发生错误', shutdownError);
-  } finally {
-    if (error) {
-      logger.error('服务异常终止', error);
-      process.exit(1);
-    } else {
-      logger.info('服务正常关闭');
+// 优雅关闭
+async function setupGracefulShutdown(server) {
+  process.on('SIGINT', () => {
+    console.log('Shutting down server...');
+    server.close(() => {
+      console.log('Server closed.');
       process.exit(0);
-    }
-  }
+    });
+  });
+
+  process.on('SIGTERM', () => {
+    console.log('Shutting down server...');
+    server.close(() => {
+      console.log('Server closed.');
+      process.exit(0);
+    });
+  });
 }
-
-// 监听进程信号
-process.on('SIGTERM', () => gracefulShutdown());
-process.on('SIGINT', () => gracefulShutdown());
-
-// 监听未捕获的异常和拒绝
-process.on('uncaughtException', (err) => {
-  logger.error('未捕获的异常', { error: err.message, stack: err.stack });
-  gracefulShutdown(err);
-});
-
-process.on('unhandledRejection', (reason) => {
-  logger.error('未处理的承诺拒绝', { reason: reason?.message || reason, stack: reason?.stack });
-  gracefulShutdown(reason);
-});
 
 // 启动应用
-startApp().catch((error) => {
-  logger.error('应用启动失败', error);
-  process.exit(1);
-});
+startApp();
 
 module.exports = app;

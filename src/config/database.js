@@ -84,13 +84,13 @@ const dbConnect = async () => {
     if (process.env.DB_SYNC === 'true') {
       logger.info('正在同步数据库模型...');
       try {
-        await sequelize.sync({ alter: true });
+        await sequelize.sync({ force: true, alter: true });
         logger.info('数据库模型同步完成');
         
         // 初始化系统基础数据
         try {
-          // 先等待模型加载完成
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          // 增加等待时间确保模型加载完成
+          await new Promise(resolve => setTimeout(resolve, 3000));
           const { initializeSystemData } = require('./initData');
           await initializeSystemData();
           logger.info('系统基础数据初始化完成');
@@ -111,5 +111,22 @@ const dbConnect = async () => {
   }
 };
 
-module.exports = dbConnect;
+module.exports = {
+  database: process.env.DB_NAME,
+  username: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT || 3306,
+  dialect: 'mysql',
+  logging: (msg) => logger.debug(msg),
+  timezone: '+08:00',
+  define: {
+    charset: 'utf8mb4',
+    collate: 'utf8mb4_unicode_ci',
+    timestamps: true,
+    underscored: false,
+    freezeTableName: false
+  }
+};
+
 module.exports.sequelize = sequelize; 

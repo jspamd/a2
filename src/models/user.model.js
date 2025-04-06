@@ -1,6 +1,6 @@
 const { DataTypes } = require('sequelize');
 
-module.exports = (sequelize, DataTypes) => {
+module.exports = (sequelize) => {
   const User = sequelize.define('User', {
     id: {
       type: DataTypes.INTEGER,
@@ -52,7 +52,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM('active', 'inactive', 'locked'),
       defaultValue: 'active'
     },
-    lastLogin: {
+    lastLoginAt: {
       type: DataTypes.DATE,
       allowNull: true
     }
@@ -77,5 +77,5 @@ module.exports = (sequelize, DataTypes) => {
     return bcrypt.compare(candidatePassword, this.password);
   };
 
-  return User;
+  return { User };
 };
