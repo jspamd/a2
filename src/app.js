@@ -50,16 +50,20 @@ async function killProcessOnPort(port) {
   try {
     if (process.platform === 'win32') {
       // Windows系统
-      const { stdout } = await execPromise(`netstat -ano | findstr :${escapeShellArg(port.toString())}`);
+      // 不使用findstr中的引号，避免命令解析问题
+      const { stdout } = await execPromise(`netstat -ano | findstr ${port}`);
       if (stdout) {
         const lines = stdout.split('\n');
         const pids = [];
         for (const line of lines) {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length > 4) {
-            const pid = parts[parts.length - 1];
-            if (pid && pid !== '0' && pid !== process.pid.toString()) {
-              pids.push(pid);
+          // 确保行包含指定端口号
+          if (line.includes(`:${port}`)) {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length > 4) {
+              const pid = parts[parts.length - 1];
+              if (pid && pid !== '0' && pid !== process.pid.toString()) {
+                pids.push(pid);
+              }
             }
           }
         }
@@ -91,6 +95,7 @@ async function killProcessOnPort(port) {
     if (!error.message.includes('没有找到任何任务') &&
         !error.message.includes('No such process')) {
       logger.error(`检查端口占用时发生错误: ${error.message}`);
+      // 不抛出异常，允许程序继续执行
     }
   }
 }
@@ -181,9 +186,9 @@ app.use('/api/monitor', require('./routes/monitor.routes'));
 app.use('/api/documents', require('./routes/document.routes'));
 app.use('/api/departments', require('./routes/department.routes'));
 app.use('/api/roles', require('./routes/role.routes'));
-// app.use('/api/schedules', require('./routes/schedule.routes'));
-// app.use('/api/announcements', require('./routes/announcement.routes'));
-// app.use('/api/attendance', require('./routes/attendance.routes'));
+app.use('/api/schedules', require('./routes/schedule.routes'));
+app.use('/api/announcements', require('./routes/announcement.routes'));
+app.use('/api/attendance', require('./routes/attendance.routes'));
 
 // 404错误处理
 app.use((req, res, next) => {

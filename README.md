@@ -47,30 +47,86 @@
 - 后端：Node.js + Express
 - 数据库：MySQL
 - 认证：JWT
-- 文件存储：阿里云OSS
-- 消息队列：Redis
+- 文件存储：本地 + 支持阿里云OSS扩展
+- 日志系统：Winston
+- 安全措施：Helmet, Rate Limit
+- API验证：Express Validator
+
+## 环境要求
+- Node.js v14+
+- MySQL 5.7+
+- Windows/Linux/MacOS
 
 ## 安装与运行
-```
+```bash
+# 克隆项目
+git clone https://github.com/您的用户名/oa-management-system.git
+cd oa-management-system
+
 # 安装依赖
 npm install
 
+# 配置环境变量
+cp .env.example .env
+# 编辑.env文件，配置数据库等信息
+
+# 初始化数据库
+node init-db.js
+
 # 开发环境运行
 npm run dev
-
-# 生产环境构建
-npm run build
 
 # 生产环境运行
 npm start
 ```
 
-## 开发团队
-- 产品经理：XXX
-- 前端开发：XXX
-- 后端开发：XXX
-- UI设计：XXX
-- 测试：XXX
+## 系统配置说明
+1. 数据库配置
+   - 在.env文件中设置数据库连接信息(DB_HOST, DB_USER, DB_PASSWORD等)
+   - 首次运行前需执行`node init-db.js`初始化数据库
+
+2. 端口配置
+   - 默认端口为3002，可在.env中修改PORT参数
+   - 系统启动时会自动检测并关闭占用端口的进程
+
+3. 文件上传配置
+   - 默认上传目录为`./uploads`
+   - 可在.env中通过UPLOAD_PATH参数修改
+
+4. 日志配置
+   - 系统日志保存在`./logs`目录
+   - 通过LOG_LEVEL参数调整日志级别
+
+## 系统管理
+### 默认管理员账户
+- 用户名: admin
+- 密码: admin123
+- 首次登录后请立即修改默认密码
+
+### 权限管理
+系统采用基于角色的权限控制(RBAC)模型：
+- 超级管理员：系统所有功能的完全访问权限
+- 部门管理员：管理所属部门的用户和文档
+- 普通用户：基本的工作流提交、文档上传等权限
+
+## 系统监控
+- 访问`/api/monitor`查看系统运行状态
+- 监控指标包括：CPU使用率、内存使用、API调用次数、响应时间等
+
+## 常见问题排查
+1. 端口占用问题
+   - 系统会自动尝试关闭占用端口的进程
+   - 如遇"端口已被占用"错误，可手动终止占用进程或修改.env中的PORT值
+
+2. 数据库连接问题
+   - 检查.env中的数据库配置是否正确
+   - 确认MySQL服务是否正常运行
+   - 查看logs目录下的错误日志获取详细信息
+
+3. 文件上传失败
+   - 检查uploads目录权限是否正确
+   - 确认文件大小是否超过系统限制(默认10MB)
 
 ## 版本历史
-- v1.0.0 (2023-07-01): 初始版本发布
+- v1.0.0 (2024-04-01): 初始版本发布
+- v1.0.1 (2024-04-15): 修复端口检测问题，完善系统功能
