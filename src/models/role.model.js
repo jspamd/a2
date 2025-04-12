@@ -44,9 +44,11 @@ module.exports = (sequelize) => {
 
   // 建立角色与用户、权限的关系
   Role.associate = (models) => {
-    // 一个角色可以分配给多个用户
-    Role.hasMany(models.User, {
+    // 角色与用户是多对多关系
+    Role.belongsToMany(models.User, {
+      through: 'UserRoles',
       foreignKey: 'roleId',
+      otherKey: 'userId',
       as: 'users'
     });
 

@@ -111,7 +111,7 @@ exports.login = async (req, res) => {
       where: { username },
       include: [{
         model: Role,
-        as: 'role'
+        as: 'roles'
       }]
     });
     
@@ -127,7 +127,7 @@ exports.login = async (req, res) => {
       id: user.id,
       username: user.username,
       status: user.status,
-      role: user.role ? user.role.code : null
+      role: user.roles && user.roles.length > 0 ? user.roles[0].code : null
     });
 
     // 检查用户状态
@@ -169,7 +169,7 @@ exports.login = async (req, res) => {
       { 
         id: user.id, 
         username: user.username,
-        role: user.role ? user.role.code : null
+        role: user.roles && user.roles.length > 0 ? user.roles[0].code : null
       },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '1d' }
@@ -181,7 +181,7 @@ exports.login = async (req, res) => {
       { 
         id: user.id, 
         username: user.username,
-        role: user.role ? user.role.code : null
+        role: user.roles && user.roles.length > 0 ? user.roles[0].code : null
       },
       process.env.JWT_REFRESH_SECRET,
       { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
@@ -205,7 +205,7 @@ exports.login = async (req, res) => {
           name: user.name,
           avatar: user.avatar,
           status: user.status,
-          role: user.role ? user.role.code : null,
+          role: user.roles && user.roles.length > 0 ? user.roles[0].code : null,
           lastLoginAt: user.lastLoginAt
         }
       }

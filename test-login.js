@@ -33,7 +33,7 @@ async function testLogin() {
     try {
       await axios.post('http://localhost:3002/api/auth/login', {
         username: 'admin',
-        password: 'admin123'
+        password: 'wrong_password'
       });
     } catch (error) {
       console.log('登录失败（符合预期）：');

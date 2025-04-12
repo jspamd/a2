@@ -1,18 +1,25 @@
-const {
-  OvertimeRecord,
-  User,
-  Department,
-  Role
-} = require('../models');
 const { Op } = require('sequelize');
 const { AppError } = require('../middleware/errorHandler');
 const moment = require('moment');
+const { logger } = require('../utils/logger');
+
+// 获取数据库模型
+let models;
+const getModels = async () => {
+  if (!models) {
+    models = await require('../models')();
+  }
+  return models;
+};
 
 /**
  * 申请加班
  */
 exports.applyOvertime = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { OvertimeRecord, User, Department, Role } = models;
+    
     const userId = req.user.id;
     const {
       overtimeType,

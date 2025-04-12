@@ -1,20 +1,27 @@
 const {
-  Announcement,
-  AnnouncementTarget,
-  AnnouncementRead,
-  User,
-  Department,
-  Role
-} = require('../models');
-const { Op } = require('sequelize');
+  Op
+} = require('sequelize');
 const { AppError } = require('../middleware/errorHandler');
 const moment = require('moment');
+const { logger } = require('../utils/logger');
+
+// 获取数据库模型
+let models;
+const getModels = async () => {
+  if (!models) {
+    models = await require('../models')();
+  }
+  return models;
+};
 
 /**
  * 发布公告
  */
 exports.createAnnouncement = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { Announcement, AnnouncementTarget, User, Department, Role } = models;
+    
     const publisherId = req.user.id;
     const {
       title,

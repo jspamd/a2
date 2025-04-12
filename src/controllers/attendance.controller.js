@@ -1,21 +1,25 @@
-const {
-  AttendanceRule,
-  DepartmentAttendanceRule,
-  AttendanceRecord,
-  LeaveRecord,
-  OvertimeRecord,
-  User,
-  Department
-} = require('../models');
 const { Op } = require('sequelize');
 const { AppError } = require('../middleware/errorHandler');
 const moment = require('moment');
+const { logger } = require('../utils/logger');
+
+// 获取数据库模型
+let models;
+const getModels = async () => {
+  if (!models) {
+    models = await require('../models')();
+  }
+  return models;
+};
 
 /**
  * 获取考勤规则
  */
 exports.getAttendanceRules = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { AttendanceRule, DepartmentAttendanceRule, Department } = models;
+    
     // 获取全局考勤规则
     const globalRules = await AttendanceRule.findAll({
       order: [['updatedAt', 'DESC']]
@@ -698,4 +702,352 @@ function calculateWorkHours(checkinTime, checkoutTime, workStartTime, workEndTim
     console.error('计算工作时长出错:', error);
     return 0;
   }
-} 
+}
+
+/**
+ * 获取所有考勤记录
+ */
+exports.getAllAttendances = async (req, res) => {
+  try {
+    const models = await getModels();
+    const { Attendance, User } = models;
+    
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    
+    const { count, rows } = await Attendance.findAndCountAll({
+      include: [
+        {
+          model: User,
+          attributes: ['id', 'name', 'username']
+        }
+      ],
+      order: [['date', 'DESC']],
+      limit,
+      offset
+    });
+    
+    res.status(200).json({
+      status: 'success',
+      message: '获取考勤记录成功',
+      data: rows,
+      pagination: {
+        total: count,
+        page,
+        limit,
+        totalPages: Math.ceil(count / limit)
+      }
+    });
+  } catch (error) {
+    logger.error('获取考勤记录失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: '获取考勤记录失败',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * 获取我的考勤记录
+ */
+exports.getMyAttendance = async (req, res) => {
+  try {
+    const models = await getModels();
+    const { Attendance } = models;
+    const userId = req.user.id;
+    
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    
+    const { count, rows } = await Attendance.findAndCountAll({
+      where: { userId },
+      order: [['date', 'DESC']],
+      limit,
+      offset
+    });
+    
+    res.status(200).json({
+      status: 'success',
+      message: '获取我的考勤记录成功',
+      data: rows,
+      pagination: {
+        total: count,
+        page,
+        limit,
+        totalPages: Math.ceil(count / limit)
+      }
+    });
+  } catch (error) {
+    logger.error('获取我的考勤记录失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: '获取考勤记录失败',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * 获取单个考勤记录
+ */
+exports.getAttendance = async (req, res) => {
+  try {
+    const models = await getModels();
+    const { Attendance, User } = models;
+    const id = req.params.id;
+    
+    const attendance = await Attendance.findByPk(id, {
+      include: [
+        {
+          model: User,
+          attributes: ['id', 'name', 'username']
+        }
+      ]
+    });
+    
+    if (!attendance) {
+      return res.status(404).json({
+        status: 'error',
+        message: '考勤记录不存在'
+      });
+    }
+    
+    res.status(200).json({
+      status: 'success',
+      message: '获取考勤记录成功',
+      data: attendance
+    });
+  } catch (error) {
+    logger.error('获取考勤记录失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: '获取考勤记录失败',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * 签到
+ */
+exports.checkIn = async (req, res) => {
+  try {
+    const models = await getModels();
+    const { Attendance } = models;
+    const userId = req.user.id;
+    
+    // 获取当前日期
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // 检查今天是否已签到
+    const existingAttendance = await Attendance.findOne({
+      where: {
+        userId,
+        date: today
+      }
+    });
+    
+    if (existingAttendance && existingAttendance.checkInTime) {
+      return res.status(400).json({
+        status: 'error',
+        message: '今天已经签到'
+      });
+    }
+    
+    // 创建或更新考勤记录
+    const now = new Date();
+    if (existingAttendance) {
+      await existingAttendance.update({
+        checkInTime: now,
+        status: 'present'
+      });
+      
+      res.status(200).json({
+        status: 'success',
+        message: '签到成功',
+        data: existingAttendance
+      });
+    } else {
+      const newAttendance = await Attendance.create({
+        userId,
+        date: today,
+        checkInTime: now,
+        status: 'present'
+      });
+      
+      res.status(201).json({
+        status: 'success',
+        message: '签到成功',
+        data: newAttendance
+      });
+    }
+  } catch (error) {
+    logger.error('签到失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: '签到失败',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * 签退
+ */
+exports.checkOut = async (req, res) => {
+  try {
+    const models = await getModels();
+    const { Attendance } = models;
+    const userId = req.user.id;
+    
+    // 获取当前日期
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // 查找今天的考勤记录
+    const attendance = await Attendance.findOne({
+      where: {
+        userId,
+        date: today
+      }
+    });
+    
+    if (!attendance) {
+      return res.status(400).json({
+        status: 'error',
+        message: '今天还未签到'
+      });
+    }
+    
+    if (attendance.checkOutTime) {
+      return res.status(400).json({
+        status: 'error',
+        message: '今天已经签退'
+      });
+    }
+    
+    // 更新签退时间
+    const now = new Date();
+    await attendance.update({
+      checkOutTime: now
+    });
+    
+    res.status(200).json({
+      status: 'success',
+      message: '签退成功',
+      data: attendance
+    });
+  } catch (error) {
+    logger.error('签退失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: '签退失败',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * 申请请假
+ */
+exports.applyLeave = async (req, res) => {
+  try {
+    const models = await getModels();
+    const { Leave } = models;
+    const userId = req.user.id;
+    const { startDate, endDate, reason, type } = req.body;
+    
+    // 验证必填字段
+    if (!startDate || !endDate || !reason || !type) {
+      return res.status(400).json({
+        status: 'error',
+        message: '开始日期、结束日期、原因和请假类型为必填项'
+      });
+    }
+    
+    // 创建请假申请
+    const leave = await Leave.create({
+      userId,
+      startDate,
+      endDate,
+      reason,
+      type,
+      status: 'pending'
+    });
+    
+    res.status(201).json({
+      status: 'success',
+      message: '请假申请提交成功',
+      data: leave
+    });
+  } catch (error) {
+    logger.error('申请请假失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: '申请请假失败',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * 处理请假申请
+ */
+exports.processLeave = async (req, res) => {
+  try {
+    const models = await getModels();
+    const { Leave } = models;
+    const id = req.params.id;
+    const { status, comment } = req.body;
+    
+    // 验证状态
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: '状态必须是 approved 或 rejected'
+      });
+    }
+    
+    // 查找请假申请
+    const leave = await Leave.findByPk(id);
+    
+    if (!leave) {
+      return res.status(404).json({
+        status: 'error',
+        message: '请假申请不存在'
+      });
+    }
+    
+    if (leave.status !== 'pending') {
+      return res.status(400).json({
+        status: 'error',
+        message: '该请假申请已处理'
+      });
+    }
+    
+    // 更新请假申请
+    await leave.update({
+      status,
+      comment,
+      processedBy: req.user.id,
+      processedAt: new Date()
+    });
+    
+    res.status(200).json({
+      status: 'success',
+      message: `请假申请已${status === 'approved' ? '批准' : '拒绝'}`,
+      data: leave
+    });
+  } catch (error) {
+    logger.error('处理请假申请失败:', error);
+    res.status(500).json({
+      status: 'error',
+      message: '处理请假申请失败',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+}; 

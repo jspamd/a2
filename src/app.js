@@ -47,10 +47,7 @@ async function killProcessOnPort(port) {
   try {
     if (process.platform === 'win32') {
       // Windows系统
-      const { stdout, stderr } = await execPromise(`netstat -ano | findstr :${port}`);
-      if (stderr) {
-        throw new Error(`netstat 命令执行失败: ${stderr}`);
-      }
+      const { stdout } = await execPromise(`netstat -ano | findstr :${escapeShellArg(port.toString())}`);
       if (stdout) {
         const lines = stdout.split('\n');
         const pids = [];
@@ -154,8 +151,8 @@ const initializeDatabase = async () => {
     await models.sequelize.authenticate();
     logger.info('数据库连接成功');
 
-    // 同步模型
-    await models.sequelize.sync({ alter: true });
+    // 同步模型 - 使用更安全的同步方式，避免索引问题
+    await models.sequelize.sync({ force: false });
     logger.info('数据库模型同步完成');
 
     // 创建管理员用户
@@ -168,10 +165,22 @@ const initializeDatabase = async () => {
   }
 };
 
+// API路由
+app.get('/api/test', (req, res) => {
+  res.json({ message: 'API正常工作' });
+});
+
 // 加载路由
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/users', require('./routes/user.routes'));
 app.use('/api/workflows', require('./routes/workflow.routes'));
+app.use('/api/monitor', require('./routes/monitor.routes'));
+// app.use('/api/documents', require('./routes/document.routes'));
+// app.use('/api/departments', require('./routes/department.routes'));
+// app.use('/api/roles', require('./routes/role.routes'));
+// app.use('/api/schedules', require('./routes/schedule.routes'));
+// app.use('/api/announcements', require('./routes/announcement.routes'));
+// app.use('/api/attendance', require('./routes/attendance.routes'));
 
 // 404错误处理
 app.use((req, res) => {
@@ -205,6 +214,10 @@ const startApp = async () => {
 
     // 检查端口占用
     await killProcessOnPort(PORT);
+    
+    // 等待8秒再启动服务器
+    logger.info(`等待8秒后启动服务器...`);
+    await new Promise(resolve => setTimeout(resolve, 8000));
 
     // 启动服务器
     const server = app.listen(PORT, () => {

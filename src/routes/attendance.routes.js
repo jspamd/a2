@@ -1,27 +1,27 @@
 const express = require('express');
 const router = express.Router();
 const attendanceController = require('../controllers/attendance.controller');
-const authMiddleware = require('../middlewares/auth.middleware');
+const { verifyToken, checkRole } = require('../middleware/auth');
 
 // 获取所有考勤记录
-router.get('/', authMiddleware.verifyToken, attendanceController.getAllAttendances);
+router.get('/', verifyToken, attendanceController.getAllAttendances);
 
 // 获取个人考勤记录
-router.get('/my', authMiddleware.verifyToken, attendanceController.getMyAttendance);
+router.get('/my', verifyToken, attendanceController.getMyAttendance);
 
 // 获取单个考勤记录
-router.get('/:id', authMiddleware.verifyToken, attendanceController.getAttendance);
+router.get('/:id', verifyToken, attendanceController.getAttendance);
 
 // 签到
-router.post('/check-in', authMiddleware.verifyToken, attendanceController.checkIn);
+router.post('/check-in', verifyToken, attendanceController.checkIn);
 
 // 签退
-router.post('/check-out', authMiddleware.verifyToken, attendanceController.checkOut);
+router.post('/check-out', verifyToken, attendanceController.checkOut);
 
 // 申请请假
-router.post('/leave', authMiddleware.verifyToken, attendanceController.applyLeave);
+router.post('/leave', verifyToken, attendanceController.applyLeave);
 
 // 处理请假申请(管理员)
-router.put('/leave/:id', authMiddleware.verifyToken, authMiddleware.isAdmin, attendanceController.processLeave);
+router.put('/leave/:id', verifyToken, checkRole(['admin']), attendanceController.processLeave);
 
 module.exports = router; 

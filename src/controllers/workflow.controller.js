@@ -1,26 +1,26 @@
-const { 
-  WorkflowDefinition,
-  WorkflowInstance,
-  WorkflowNodeInstance,
-  User,
-  Department,
-  Role,
-  Workflow,
-  WorkflowNode,
-  WorkflowEdge,
-  WorkflowTask
-} = require('../models');
+// 获取数据库模型
+let models;
+const getModels = async () => {
+  if (!models) {
+    models = await require('../models')();
+  }
+  return models;
+};
+
 const { Op } = require('sequelize');
 const { AppError } = require('../middleware/errorHandler');
 const moment = require('moment');
 const sequelize = require('sequelize');
-const logger = require('../utils/logger');
+const { logger } = require('../utils/logger');
 
 /**
  * 获取所有工作流定义
  */
 exports.getAllWorkflowDefinitions = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { WorkflowDefinition } = models;
+    
     // 分页参数
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -77,11 +77,14 @@ exports.getAllWorkflowDefinitions = async (req, res, next) => {
  */
 exports.getWorkflowDefinitionById = async (req, res) => {
   try {
+    const models = await getModels();
+    const { WorkflowDefinition, WorkflowInstance } = models;
+    
     const { id } = req.params;
     const definition = await WorkflowDefinition.findByPk(id, {
       include: [{
         model: WorkflowInstance,
-        as: 'workflowInstances',
+        as: 'definitionInstances', // 修正关联别名
         attributes: ['id', 'status', 'startTime', 'endTime']
       }]
     });
@@ -111,6 +114,9 @@ exports.getWorkflowDefinitionById = async (req, res) => {
  */
 exports.createWorkflowDefinition = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { WorkflowDefinition } = models;
+    
     const { 
       name, 
       code, 
@@ -233,6 +239,9 @@ exports.createWorkflowDefinition = async (req, res, next) => {
  */
 exports.updateWorkflowDefinition = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { WorkflowDefinition } = models;
+    
     const workflowId = req.params.id;
     const { 
       name, 
@@ -289,6 +298,9 @@ exports.updateWorkflowDefinition = async (req, res, next) => {
  */
 exports.deleteWorkflowDefinition = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { WorkflowDefinition, WorkflowInstance } = models;
+    
     const workflowId = req.params.id;
     
     // 查找工作流定义
@@ -324,6 +336,9 @@ exports.deleteWorkflowDefinition = async (req, res, next) => {
  */
 exports.getMyWorkflowInstances = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { WorkflowInstance, User } = models;
+    
     const userId = req.user.id;
     
     // 分页参数
@@ -375,6 +390,9 @@ exports.getMyWorkflowInstances = async (req, res, next) => {
  */
 exports.getMyPendingApprovals = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { WorkflowNodeInstance, WorkflowInstance, User, Role, Department } = models;
+    
     const userId = req.user.id;
     
     // 分页参数
@@ -428,6 +446,9 @@ exports.createWorkflowInstance = async (req, res, next) => {
   const transaction = await WorkflowDefinition.sequelize.transaction();
   
   try {
+    const models = await getModels();
+    const { WorkflowDefinition, WorkflowInstance, WorkflowNodeInstance, User, Role, Department } = models;
+    
     const { workflowDefinitionId, title, formData } = req.body;
 
     // 验证必填字段
@@ -584,6 +605,9 @@ exports.createWorkflowInstance = async (req, res, next) => {
  */
 exports.approveWorkflowNode = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { WorkflowNodeInstance, WorkflowInstance, User, Role, Department } = models;
+    
     const nodeInstanceId = req.params.id;
     const { comment, action } = req.body;
     
@@ -740,6 +764,9 @@ exports.approveWorkflowNode = async (req, res, next) => {
  */
 exports.getWorkflowInstanceById = async (req, res) => {
   try {
+    const models = await getModels();
+    const { WorkflowInstance, Workflow, WorkflowNode, WorkflowEdge, WorkflowTask, User } = models;
+    
     const { id } = req.params;
     const userId = req.user.id;
     
@@ -878,6 +905,9 @@ exports.getWorkflowInstanceById = async (req, res) => {
  */
 exports.getTodoTasks = async (req, res) => {
   try {
+    const models = await getModels();
+    const { WorkflowNodeInstance, WorkflowInstance, WorkflowDefinition, User } = models;
+    
     const { userId } = req.user;
     const { page = 1, limit = 10 } = req.query;
     const offset = (page - 1) * limit;
@@ -893,7 +923,7 @@ exports.getTodoTasks = async (req, res) => {
         required: false,
         include: [{
           model: WorkflowDefinition,
-          as: 'definition',
+          as: 'workflowDefinition',
           required: false,
           attributes: ['name', 'code', 'category']
         }, {
@@ -929,6 +959,9 @@ exports.getTodoTasks = async (req, res) => {
  */
 exports.processTask = async (req, res, next) => {
   try {
+    const models = await getModels();
+    const { WorkflowTask } = models;
+    
     const taskId = req.params.id;
     const userId = req.user.id;
     const { action, comment, formData } = req.body;
@@ -1203,6 +1236,9 @@ exports.processTask = async (req, res, next) => {
 exports.cancelWorkflowInstance = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
+    const models = await getModels();
+    const { WorkflowInstance, WorkflowNodeInstance } = models;
+    
     const { id } = req.params;
     const { userId } = req.user;
 
@@ -1322,6 +1358,9 @@ function evalCondition(condition, formData, variables) {
 // 获取工作流实例列表
 exports.getWorkflowInstances = async (req, res) => {
   try {
+    const models = await getModels();
+    const { WorkflowInstance } = models;
+    
     const { workflowDefinitionId, status, page = 1, limit = 10 } = req.query;
     const offset = (page - 1) * limit;
 
@@ -1370,6 +1409,9 @@ exports.getWorkflowInstances = async (req, res) => {
 // 获取工作流实例详情
 exports.getWorkflowInstanceById = async (req, res) => {
   try {
+    const models = await getModels();
+    const { WorkflowInstance, WorkflowDefinition, WorkflowNodeInstance, User } = models;
+    
     const { id } = req.params;
     const instance = await WorkflowInstance.findByPk(id, {
       include: [{
@@ -1418,6 +1460,9 @@ exports.getWorkflowInstanceById = async (req, res) => {
 exports.startWorkflowInstance = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
+    const models = await getModels();
+    const { WorkflowDefinition, WorkflowInstance, WorkflowNodeInstance, User, Role, Department } = models;
+    
     const { workflowDefinitionId, title, formData, businessKey } = req.body;
     const { userId } = req.user;
 

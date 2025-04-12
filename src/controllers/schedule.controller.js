@@ -1,18 +1,25 @@
-const { 
-  Schedule, 
-  ScheduleParticipant, 
-  User, 
-  Department 
-} = require('../models');
 const { Op } = require('sequelize');
 const { AppError } = require('../middleware/errorHandler');
 const moment = require('moment');
+const { logger } = require('../utils/logger');
+
+// 获取数据库模型
+let models;
+const getModels = async () => {
+  if (!models) {
+    models = await require('../models')();
+  }
+  return models;
+};
 
 /**
  * 获取所有日程
  */
 exports.getAllSchedules = async (req, res) => {
   try {
+    const models = await getModels();
+    const { Schedule, ScheduleParticipant, User, Department } = models;
+    
     // 检查权限
     if (req.user.role !== 'admin') {
       return res.status(403).json({
@@ -88,10 +95,10 @@ exports.getAllSchedules = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('获取日程列表错误:', error);
+    logger.error('获取日程列表失败:', error);
     res.status(500).json({
       status: 'error',
-      message: '获取日程列表过程中发生错误',
+      message: '获取日程列表失败',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

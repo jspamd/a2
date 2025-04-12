@@ -9,4 +9,9 @@ process.env.NODE_ENV = process.env.NODE_ENV || 'development';
 process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 
 // 启动应用
-require('./src/app.js'); 
+try {
+  require('./src/app.js');
+} catch (error) {
+  console.error('启动应用时发生错误:', error);
+  process.exit(1);
+} 

@@ -48,6 +48,14 @@ module.exports = (sequelize) => {
       type: DataTypes.STRING(50),
       allowNull: true
     },
+    departmentId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'Departments',
+        key: 'id'
+      }
+    },
     status: {
       type: DataTypes.ENUM('active', 'inactive', 'locked'),
       defaultValue: 'active'
@@ -75,6 +83,23 @@ module.exports = (sequelize) => {
   User.prototype.comparePassword = async function(candidatePassword) {
     const bcrypt = require('bcrypt');
     return bcrypt.compare(candidatePassword, this.password);
+  };
+
+  // 建立用户与角色、部门的关系
+  User.associate = (models) => {
+    // 用户属于一个部门
+    User.belongsTo(models.Department, {
+      foreignKey: 'departmentId',
+      as: 'department'
+    });
+
+    // 用户与角色是多对多关系
+    User.belongsToMany(models.Role, {
+      through: 'UserRoles',
+      foreignKey: 'userId',
+      otherKey: 'roleId',
+      as: 'roles'
+    });
   };
 
   return { User };

@@ -1,26 +1,40 @@
-const fs = require('fs');
+const { Op, Sequelize, literal } = require('sequelize');
 const path = require('path');
-const { Op, literal } = require('sequelize');
-const { sequelize } = require('../models');
-const { AppError } = require('../middleware/errorHandler');
-const { 
-  Document, 
-  DocumentVersion, 
-  DocumentCategory, 
-  DocumentShare, 
-  DocumentComment, 
-  DocumentStar,
-  DocumentPermission,
-  User,
-  Department,
-} = require('../models');
-const { logError, logInfo } = require('../utils/logger');
-const { promisify } = require('util');
+const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const { AppError } = require('../middleware/errorHandler');
+const { logger } = require('../utils/logger');
+const util = require('util');
 
-// 将fs的异步函数转换为Promise
-const unlinkAsync = promisify(fs.unlink);
-const mkdirAsync = promisify(fs.mkdir);
+// 文件系统异步方法
+const unlinkAsync = util.promisify(fs.unlink);
+const readFileAsync = util.promisify(fs.readFile);
+const writeFileAsync = util.promisify(fs.writeFile);
+
+// 获取数据库模型
+let models, sequelize;
+let Document, DocumentCategory, DocumentVersion, DocumentComment, DocumentShare, DocumentPermission, User, Department;
+
+const getModels = async () => {
+  if (!models) {
+    models = await require('../models')();
+    sequelize = models.sequelize;
+    Document = models.Document;
+    DocumentCategory = models.DocumentCategory;
+    DocumentVersion = models.DocumentVersion;
+    DocumentComment = models.DocumentComment;
+    DocumentShare = models.DocumentShare;
+    DocumentPermission = models.DocumentPermission;
+    User = models.User;
+    Department = models.Department;
+  }
+  return models;
+};
+
+// 在每个请求前确保模型已初始化
+const ensureModelsInitialized = async () => {
+  await getModels();
+};
 
 // 文件上传目录
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../../uploads/documents');
@@ -32,7 +46,7 @@ const ensureUploadDirExists = async () => {
       await mkdirAsync(UPLOAD_DIR, { recursive: true });
     }
   } catch (error) {
-    logError('创建上传目录失败', { error: error.message });
+    logger.error('创建上传目录失败', { error: error.message });
     throw new AppError('服务器配置错误：无法创建上传目录', 500);
   }
 };
@@ -42,6 +56,7 @@ const ensureUploadDirExists = async () => {
  */
 exports.getDocumentCategories = async (req, res, next) => {
   try {
+    await ensureModelsInitialized();
     const categories = await DocumentCategory.findAll({
       order: [['name', 'ASC']]
     });
@@ -52,7 +67,7 @@ exports.getDocumentCategories = async (req, res, next) => {
       data: categories
     });
   } catch (error) {
-    logError('获取文档类别失败', { error: error.message });
+    logger.error('获取文档类别失败', { error: error.message });
     next(error);
   }
 };
@@ -169,7 +184,7 @@ exports.getAllDocuments = async (req, res, next) => {
       }
     });
   } catch (error) {
-    logError('获取文档列表失败', { error: error.message });
+    logger.error('获取文档列表失败', { error: error.message });
     next(error);
   }
 };
@@ -217,7 +232,7 @@ exports.getRecentDocuments = async (req, res, next) => {
       data: recentDocuments
     });
   } catch (error) {
-    logError('获取最近文档失败', { error: error.message });
+    logger.error('获取最近文档失败', { error: error.message });
     next(error);
   }
 };
@@ -318,7 +333,7 @@ exports.searchDocuments = async (req, res, next) => {
       }
     });
   } catch (error) {
-    logError('搜索文档失败', { error: error.message });
+    logger.error('搜索文档失败', { error: error.message });
     next(error);
   }
 };
@@ -375,7 +390,7 @@ exports.getMyDocuments = async (req, res, next) => {
       }
     });
   } catch (error) {
-    logError('获取我的文档失败', { error: error.message });
+    logger.error('获取我的文档失败', { error: error.message });
     next(error);
   }
 };
@@ -447,7 +462,7 @@ exports.getSharedWithMe = async (req, res, next) => {
       }
     });
   } catch (error) {
-    logError('获取共享文档失败', { error: error.message });
+    logger.error('获取共享文档失败', { error: error.message });
     next(error);
   }
 };
@@ -520,7 +535,7 @@ exports.getDocumentById = async (req, res, next) => {
       data: document
     });
   } catch (error) {
-    logError('获取文档详情失败', { error: error.message });
+    logger.error('获取文档详情失败', { error: error.message });
     next(error);
   }
 };
@@ -557,7 +572,7 @@ exports.getDocumentVersions = async (req, res, next) => {
       data: versions
     });
   } catch (error) {
-    logError('获取文档版本历史失败', { error: error.message });
+    logger.error('获取文档版本历史失败', { error: error.message });
     next(error);
   }
 };
@@ -658,7 +673,7 @@ exports.uploadDocument = async (req, res, next) => {
       ]
     });
     
-    logInfo('用户上传了新文档', { 
+    logger.info('用户上传了新文档', { 
       documentId: result.document.id,
       userId,
       fileName: originalname
@@ -675,7 +690,7 @@ exports.uploadDocument = async (req, res, next) => {
       await unlinkAsync(req.file.path);
     }
     
-    logError('上传文档失败', { error: error.message });
+    logger.error('上传文档失败', { error: error.message });
     next(error);
   }
 };
@@ -767,7 +782,7 @@ exports.updateDocument = async (req, res, next) => {
       data: document
     });
   } catch (error) {
-    logError('更新文档失败', { error: error.message });
+    logger.error('更新文档失败', { error: error.message });
     next(error);
   }
 };
@@ -850,7 +865,7 @@ exports.uploadNewVersion = async (req, res, next) => {
       ]
     });
     
-    logInfo('用户上传了文档新版本', { 
+    logger.info('用户上传了文档新版本', { 
       documentId,
       versionId: newVersion.id,
       userId,
@@ -868,7 +883,7 @@ exports.uploadNewVersion = async (req, res, next) => {
       await unlinkAsync(req.file.path);
     }
     
-    logError('上传文档新版本失败', { error: error.message });
+    logger.error('上传文档新版本失败', { error: error.message });
     next(error);
   }
 };
@@ -996,7 +1011,7 @@ exports.shareDocument = async (req, res, next) => {
       }
     });
   } catch (error) {
-    logError('共享文档失败', { error: error.message });
+    logger.error('共享文档失败', { error: error.message });
     next(error);
   }
 };
@@ -1036,7 +1051,7 @@ exports.unshareDocument = async (req, res, next) => {
       message: '已取消与该用户的文档共享'
     });
   } catch (error) {
-    logError('取消共享文档失败', { error: error.message });
+    logger.error('取消共享文档失败', { error: error.message });
     next(error);
   }
 };
@@ -1076,7 +1091,7 @@ exports.deleteDocument = async (req, res, next) => {
       message: '删除文档成功'
     });
   } catch (error) {
-    logError('删除文档失败', { error: error.message });
+    logger.error('删除文档失败', { error: error.message });
     next(error);
   }
 };
@@ -1122,7 +1137,7 @@ exports.starDocument = async (req, res, next) => {
       message: '文档已添加星标'
     });
   } catch (error) {
-    logError('添加文档星标失败', { error: error.message });
+    logger.error('添加文档星标失败', { error: error.message });
     next(error);
   }
 };
@@ -1148,7 +1163,7 @@ exports.unstarDocument = async (req, res, next) => {
       message: '已取消文档星标'
     });
   } catch (error) {
-    logError('取消文档星标失败', { error: error.message });
+    logger.error('取消文档星标失败', { error: error.message });
     next(error);
   }
 };
@@ -1186,7 +1201,7 @@ exports.getDocumentComments = async (req, res, next) => {
       data: comments
     });
   } catch (error) {
-    logError('获取文档评论失败', { error: error.message });
+    logger.error('获取文档评论失败', { error: error.message });
     next(error);
   }
 };
@@ -1218,7 +1233,7 @@ exports.addDocumentComment = async (req, res, next) => {
       data: comment
     });
   } catch (error) {
-    logError('添加文档评论失败', { error: error.message });
+    logger.error('添加文档评论失败', { error: error.message });
     next(error);
   }
 };
@@ -1252,7 +1267,7 @@ exports.deleteDocumentComment = async (req, res, next) => {
       message: '评论删除成功'
     });
   } catch (error) {
-    logError('删除文档评论失败', { error: error.message });
+    logger.error('删除文档评论失败', { error: error.message });
     next(error);
   }
 };
@@ -1283,7 +1298,7 @@ exports.downloadDocument = async (req, res, next) => {
 
     res.download(filePath, document.originalName);
   } catch (error) {
-    logError('下载文档失败', { error: error.message });
+    logger.error('下载文档失败', { error: error.message });
     next(error);
   }
 };
@@ -1441,7 +1456,7 @@ exports.createDocument = async (req, res, next) => {
       ]
     });
 
-    logInfo('用户创建了新HTML文档', { 
+    logger.info('用户创建了新HTML文档', { 
       documentId: document.id,
       userId,
       title
@@ -1453,7 +1468,7 @@ exports.createDocument = async (req, res, next) => {
       data: completeDocument
     });
   } catch (error) {
-    logError('创建HTML文档失败', { error: error.message });
+    logger.error('创建HTML文档失败', { error: error.message });
     next(error);
   }
 };
@@ -1493,7 +1508,7 @@ exports.updateDocumentPermissions = async (req, res, next) => {
       message: '更新文档权限成功'
     });
   } catch (error) {
-    logError('更新文档权限失败', { error: error.message });
+    logger.error('更新文档权限失败', { error: error.message });
     next(error);
   }
 };
@@ -1546,7 +1561,7 @@ exports.createFolder = async (req, res, next) => {
       ]
     });
 
-    logInfo('用户创建了新文件夹', { 
+    logger.info('用户创建了新文件夹', { 
       folderId: folder.id,
       userId,
       title
@@ -1558,7 +1573,7 @@ exports.createFolder = async (req, res, next) => {
       data: completeFolder
     });
   } catch (error) {
-    logError('创建文件夹失败', { error: error.message });
+    logger.error('创建文件夹失败', { error: error.message });
     next(error);
   }
 };
@@ -1598,7 +1613,7 @@ exports.createDocumentCategory = async (req, res, next) => {
       data: category
     });
   } catch (error) {
-    logError('创建文档分类失败', { error: error.message });
+    logger.error('创建文档分类失败', { error: error.message });
     next(error);
   }
 };
@@ -1641,7 +1656,7 @@ exports.updateDocumentCategory = async (req, res, next) => {
       data: category
     });
   } catch (error) {
-    logError('更新文档分类失败', { error: error.message });
+    logger.error('更新文档分类失败', { error: error.message });
     next(error);
   }
 };
@@ -1676,7 +1691,7 @@ exports.deleteDocumentCategory = async (req, res, next) => {
       message: '删除文档分类成功'
     });
   } catch (error) {
-    logError('删除文档分类失败', { error: error.message });
+    logger.error('删除文档分类失败', { error: error.message });
     next(error);
   }
 };
@@ -1735,7 +1750,7 @@ exports.previewDocument = async (req, res, next) => {
       }
     });
   } catch (error) {
-    logError('获取文档预览失败', { error: error.message });
+    logger.error('获取文档预览失败', { error: error.message });
     next(error);
   }
 };
@@ -1838,7 +1853,7 @@ exports.getDocumentStats = async (req, res, next) => {
       }
     });
   } catch (error) {
-    logError('获取文档统计信息失败', { error: error.message });
+    logger.error('获取文档统计信息失败', { error: error.message });
     next(error);
   }
 };
@@ -1907,7 +1922,7 @@ exports.compareDocumentVersions = async (req, res, next) => {
       }
     });
   } catch (error) {
-    logError('比较文档版本失败', { error: error.message });
+    logger.error('比较文档版本失败', { error: error.message });
     next(error);
   }
 };
@@ -1960,7 +1975,7 @@ exports.getDocumentPermissions = async (req, res, next) => {
       data: document.permissions
     });
   } catch (error) {
-    logError('获取文档权限失败', { error: error.message });
+    logger.error('获取文档权限失败', { error: error.message });
     next(error);
   }
 };
@@ -2007,7 +2022,7 @@ exports.getRecycleBin = async (req, res, next) => {
       data: documents
     });
   } catch (error) {
-    logError('获取回收站文档列表失败', { error: error.message });
+    logger.error('获取回收站文档列表失败', { error: error.message });
     next(error);
   }
 };
@@ -2060,7 +2075,7 @@ exports.restoreDocument = async (req, res, next) => {
       data: restoredDocument
     });
   } catch (error) {
-    logError('恢复文档失败', { error: error.message });
+    logger.error('恢复文档失败', { error: error.message });
     next(error);
   }
 };
@@ -2097,7 +2112,7 @@ exports.deleteDocumentPermanently = async (req, res, next) => {
       message: '文档永久删除成功'
     });
   } catch (error) {
-    logError('永久删除文档失败', { error: error.message });
+    logger.error('永久删除文档失败', { error: error.message });
     next(error);
   }
 }; 

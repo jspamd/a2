@@ -45,5 +45,24 @@ module.exports = (sequelize, DataTypes) => {
     ]
   });
 
+  // 定义部门的关联关系
+  Department.associate = (models) => {
+    // 部门与用户之间是一对多关系
+    Department.hasMany(models.User, {
+      foreignKey: 'departmentId',
+      as: 'users'
+    });
+
+    // 部门的自关联（上下级关系）
+    Department.belongsTo(Department, {
+      foreignKey: 'parentId',
+      as: 'parent'
+    });
+    Department.hasMany(Department, {
+      foreignKey: 'parentId',
+      as: 'children'
+    });
+  };
+
   return { Department };
 };

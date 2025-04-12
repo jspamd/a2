@@ -1,12 +1,24 @@
 const bcrypt = require('bcrypt');
-const { User, Role, Department } = require('../models');
 const { Sequelize, Op } = require('sequelize');
+const { logger } = require('../utils/logger');
+
+// 获取数据库模型
+let models;
+const getModels = async () => {
+  if (!models) {
+    models = await require('../models')();
+  }
+  return models;
+};
 
 /**
  * 获取所有用户
  */
 exports.getAllUsers = async (req, res) => {
   try {
+    const models = await getModels();
+    const { User, Department, Role } = models;
+    
     // 分页参数
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -41,7 +53,7 @@ exports.getAllUsers = async (req, res) => {
       where: whereCondition,
       include: [
         { model: Department, as: 'department' },
-        { model: Role }
+        { model: Role, as: 'roles' }
       ],
       attributes: { exclude: ['password'] },
       limit,
@@ -64,7 +76,7 @@ exports.getAllUsers = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('获取用户列表错误:', error);
+    logger.error('获取用户列表错误:', error);
     res.status(500).json({
       status: 'error',
       message: '获取用户列表失败',
@@ -78,12 +90,14 @@ exports.getAllUsers = async (req, res) => {
  */
 exports.getUserById = async (req, res) => {
   try {
+    const models = await getModels();
+    const { User, Department, Role } = models;
     const userId = req.params.id;
     
     const user = await User.findByPk(userId, {
       include: [
         { model: Department, as: 'department' },
-        { model: Role }
+        { model: Role, as: 'roles' }
       ],
       attributes: { exclude: ['password'] }
     });
@@ -101,7 +115,7 @@ exports.getUserById = async (req, res) => {
       data: user
     });
   } catch (error) {
-    console.error('获取用户详情错误:', error);
+    logger.error('获取用户详情错误:', error);
     res.status(500).json({
       status: 'error',
       message: '获取用户详情失败',
@@ -115,6 +129,9 @@ exports.getUserById = async (req, res) => {
  */
 exports.createUser = async (req, res) => {
   try {
+    const models = await getModels();
+    const { User, Department, Role } = models;
+    
     const { 
       username, 
       password, 
@@ -184,7 +201,7 @@ exports.createUser = async (req, res) => {
     const userData = await User.findByPk(newUser.id, {
       include: [
         { model: Department, as: 'department' },
-        { model: Role }
+        { model: Role, as: 'roles' }
       ],
       attributes: { exclude: ['password'] }
     });
@@ -195,7 +212,7 @@ exports.createUser = async (req, res) => {
       data: userData
     });
   } catch (error) {
-    console.error('创建用户错误:', error);
+    logger.error('创建用户错误:', error);
     res.status(500).json({
       status: 'error',
       message: '创建用户失败',
@@ -209,21 +226,12 @@ exports.createUser = async (req, res) => {
  */
 exports.updateUser = async (req, res) => {
   try {
+    const models = await getModels();
+    const { User, Department, Role } = models;
     const userId = req.params.id;
-    const { 
-      name, 
-      email, 
-      phone, 
-      position, 
-      departmentId,
-      roleIds,
-      status,
-      avatar
-    } = req.body;
     
-    // 查找用户
+    // 检查用户是否存在
     const user = await User.findByPk(userId);
-    
     if (!user) {
       return res.status(404).json({
         status: 'error',
@@ -241,10 +249,10 @@ exports.updateUser = async (req, res) => {
     }
     
     // 检查邮箱是否被其他用户使用
-    if (email && email !== user.email) {
+    if (req.body.email && req.body.email !== user.email) {
       const existingUser = await User.findOne({
         where: {
-          email,
+          email: req.body.email,
           id: { [Op.ne]: userId }
         }
       });
@@ -257,23 +265,15 @@ exports.updateUser = async (req, res) => {
       }
     }
     
-    // 更新用户基本信息
-    await user.update({
-      name: name || user.name,
-      email: email || user.email,
-      phone: phone || user.phone,
-      position: position || user.position,
-      departmentId: departmentId || user.departmentId,
-      status: status || user.status,
-      avatar: avatar || user.avatar
-    });
+    // 更新用户信息
+    await user.update(req.body);
     
     // 如果提供了角色IDs，更新角色关联
-    if (roleIds && Array.isArray(roleIds)) {
+    if (req.body.roleIds && Array.isArray(req.body.roleIds)) {
       const roles = await Role.findAll({
         where: {
           id: {
-            [Op.in]: roleIds
+            [Op.in]: req.body.roleIds
           }
         }
       });
@@ -281,11 +281,11 @@ exports.updateUser = async (req, res) => {
       await user.setRoles(roles);
     }
     
-    // 获取更新后的用户数据（包含关联数据）
+    // 返回更新后的用户信息
     const updatedUser = await User.findByPk(userId, {
       include: [
         { model: Department, as: 'department' },
-        { model: Role }
+        { model: Role, as: 'roles' }
       ],
       attributes: { exclude: ['password'] }
     });
@@ -296,7 +296,7 @@ exports.updateUser = async (req, res) => {
       data: updatedUser
     });
   } catch (error) {
-    console.error('更新用户错误:', error);
+    logger.error('更新用户错误:', error);
     res.status(500).json({
       status: 'error',
       message: '更新用户失败',
@@ -310,11 +310,12 @@ exports.updateUser = async (req, res) => {
  */
 exports.deleteUser = async (req, res) => {
   try {
+    const models = await getModels();
+    const { User } = models;
     const userId = req.params.id;
     
-    // 查找用户
+    // 检查用户是否存在
     const user = await User.findByPk(userId);
-    
     if (!user) {
       return res.status(404).json({
         status: 'error',
@@ -355,7 +356,7 @@ exports.deleteUser = async (req, res) => {
       message: '用户删除成功'
     });
   } catch (error) {
-    console.error('删除用户错误:', error);
+    logger.error('删除用户错误:', error);
     res.status(500).json({
       status: 'error',
       message: '删除用户失败',
@@ -369,10 +370,13 @@ exports.deleteUser = async (req, res) => {
  */
 exports.getUserRoles = async (req, res) => {
   try {
+    const models = await getModels();
+    const { User, Role } = models;
     const userId = req.params.id;
     
-    // 查找用户
-    const user = await User.findByPk(userId);
+    const user = await User.findByPk(userId, {
+      include: [{ model: Role, as: 'roles' }]
+    });
     
     if (!user) {
       return res.status(404).json({
@@ -381,16 +385,13 @@ exports.getUserRoles = async (req, res) => {
       });
     }
     
-    // 获取用户角色
-    const roles = await user.getRoles();
-    
     res.status(200).json({
       status: 'success',
       message: '获取用户角色成功',
-      data: roles
+      data: user.roles
     });
   } catch (error) {
-    console.error('获取用户角色错误:', error);
+    logger.error('获取用户角色错误:', error);
     res.status(500).json({
       status: 'error',
       message: '获取用户角色失败',
@@ -404,19 +405,13 @@ exports.getUserRoles = async (req, res) => {
  */
 exports.updateUserRoles = async (req, res) => {
   try {
+    const models = await getModels();
+    const { User, Role } = models;
     const userId = req.params.id;
     const { roleIds } = req.body;
     
-    if (!Array.isArray(roleIds)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'roleIds必须是一个数组'
-      });
-    }
-    
-    // 查找用户
+    // 检查用户是否存在
     const user = await User.findByPk(userId);
-    
     if (!user) {
       return res.status(404).json({
         status: 'error',
@@ -424,7 +419,7 @@ exports.updateUserRoles = async (req, res) => {
       });
     }
     
-    // 查找角色
+    // 检查角色是否存在
     const roles = await Role.findAll({
       where: {
         id: {
@@ -433,26 +428,28 @@ exports.updateUserRoles = async (req, res) => {
       }
     });
     
-    if (roles.length === 0 && roleIds.length > 0) {
+    if (roles.length !== roleIds.length) {
       return res.status(400).json({
         status: 'error',
-        message: '未找到有效的角色'
+        message: '部分角色不存在'
       });
     }
     
     // 更新用户角色
     await user.setRoles(roles);
     
-    // 获取更新后的角色
-    const updatedRoles = await user.getRoles();
+    // 返回更新后的用户角色
+    const updatedUser = await User.findByPk(userId, {
+      include: [{ model: Role, as: 'roles' }]
+    });
     
     res.status(200).json({
       status: 'success',
       message: '用户角色更新成功',
-      data: updatedRoles
+      data: updatedUser.roles
     });
   } catch (error) {
-    console.error('更新用户角色错误:', error);
+    logger.error('更新用户角色错误:', error);
     res.status(500).json({
       status: 'error',
       message: '更新用户角色失败',
@@ -466,6 +463,8 @@ exports.updateUserRoles = async (req, res) => {
  */
 exports.resetPassword = async (req, res) => {
   try {
+    const models = await getModels();
+    const { User } = models;
     const userId = req.params.id;
     const { newPassword } = req.body;
     
@@ -476,9 +475,8 @@ exports.resetPassword = async (req, res) => {
       });
     }
     
-    // 查找用户
+    // 检查用户是否存在
     const user = await User.findByPk(userId);
-    
     if (!user) {
       return res.status(404).json({
         status: 'error',
@@ -490,16 +488,14 @@ exports.resetPassword = async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     
     // 更新密码
-    await user.update({
-      password: hashedPassword
-    });
+    await user.update({ password: hashedPassword });
     
     res.status(200).json({
       status: 'success',
       message: '密码重置成功'
     });
   } catch (error) {
-    console.error('重置密码错误:', error);
+    logger.error('重置密码错误:', error);
     res.status(500).json({
       status: 'error',
       message: '重置密码失败',
