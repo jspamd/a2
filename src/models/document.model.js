@@ -397,120 +397,172 @@ module.exports = (sequelize, DataTypes) => {
     ]
   });
 
-  // 定义模型关联
-  const defineAssociations = () => {
+  // 添加标准的associate方法
+  Document.associate = (models) => {
+    // 文档与文档分类的关联
+    Document.belongsTo(models.DocumentCategory, {
+      foreignKey: 'categoryId',
+      as: 'category'
+    });
+
+    // 文档版本关联
+    Document.hasMany(models.DocumentVersion, {
+      foreignKey: 'documentId',
+      as: 'versions'
+    });
+
+    // 文档与权限的关联
+    Document.hasMany(models.DocumentPermission, {
+      foreignKey: 'documentId',
+      as: 'permissions'
+    });
+
+    // 文件夹与文档关联
+    Document.belongsTo(models.Folder, { 
+      foreignKey: 'folderId', 
+      as: 'folder' 
+    });
+
+    // 文档共享关联
+    Document.hasMany(models.DocumentShare, { 
+      foreignKey: 'documentId', 
+      as: 'shares' 
+    });
+
+    // 文档评论关联
+    Document.hasMany(models.DocumentComment, {
+      foreignKey: 'documentId',
+      as: 'comments'
+    });
+
+    // 文档收藏关联
+    Document.hasMany(models.DocumentStar, {
+      foreignKey: 'documentId',
+      as: 'stars'
+    });
+
+    // 与上传者的关联
+    Document.belongsTo(models.User, { 
+      foreignKey: 'uploaderId', 
+      as: 'uploader' 
+    });
+  };
+
+  DocumentCategory.associate = (models) => {
     // 文档分类自关联
-    DocumentCategory.hasMany(DocumentCategory, {
+    DocumentCategory.hasMany(models.DocumentCategory, {
       foreignKey: 'parentId',
       as: 'children'
     });
 
-    DocumentCategory.belongsTo(DocumentCategory, {
+    DocumentCategory.belongsTo(models.DocumentCategory, {
       foreignKey: 'parentId',
       as: 'parent'
     });
 
     // 文档与文档分类的关联
-    DocumentCategory.hasMany(Document, {
+    DocumentCategory.hasMany(models.Document, {
       foreignKey: 'categoryId',
       as: 'documents'
     });
+  };
 
-    Document.belongsTo(DocumentCategory, {
-      foreignKey: 'categoryId',
-      as: 'category'
-    });
-
-    // 文档版本关联 - 修改别名，解决冲突
-    Document.hasMany(DocumentVersion, {
-      foreignKey: 'documentId',
-      as: 'versions'
-    });
-
-    DocumentVersion.belongsTo(Document, {
+  DocumentVersion.associate = (models) => {
+    DocumentVersion.belongsTo(models.Document, {
       foreignKey: 'documentId',
       as: 'document'
     });
-
-    // 文档与权限的关联
-    Document.hasMany(DocumentPermission, {
-      foreignKey: 'documentId',
-      as: 'permissions'
-    });
-
-    DocumentPermission.belongsTo(Document, {
-      foreignKey: 'documentId',
-      as: 'document'
-    });
-
-    // 文件夹与文档关联
-    Document.belongsTo(Folder, { foreignKey: 'folderId', as: 'folder' });
-    Folder.hasMany(Document, { foreignKey: 'folderId', as: 'documents' });
-
-    // 文件夹自关联
-    Folder.belongsTo(Folder, { foreignKey: 'parentId', as: 'parent' });
-    Folder.hasMany(Folder, { foreignKey: 'parentId', as: 'subFolders' });
-
-    Document.hasMany(DocumentShare, { foreignKey: 'documentId', as: 'shares' });
-    DocumentShare.belongsTo(Document, { foreignKey: 'documentId', as: 'document' });
 
     // 文档版本关联
-    DocumentVersion.belongsTo(User, {
+    DocumentVersion.belongsTo(models.User, {
       foreignKey: 'uploaderId',
       as: 'uploader'
     });
+  };
+
+  DocumentPermission.associate = (models) => {
+    DocumentPermission.belongsTo(models.Document, {
+      foreignKey: 'documentId',
+      as: 'document'
+    });
+
+    // 文档权限和用户、部门的关联
+    DocumentPermission.belongsTo(models.User, { 
+      foreignKey: 'targetId', 
+      as: 'user', 
+      constraints: false 
+    });
+    
+    DocumentPermission.belongsTo(models.Department, { 
+      foreignKey: 'targetId', 
+      as: 'department', 
+      constraints: false 
+    });
+  };
+
+  Folder.associate = (models) => {
+    Folder.hasMany(models.Document, { 
+      foreignKey: 'folderId', 
+      as: 'documents' 
+    });
+
+    // 文件夹自关联
+    Folder.belongsTo(models.Folder, { 
+      foreignKey: 'parentId', 
+      as: 'parent' 
+    });
+    
+    Folder.hasMany(models.Folder, { 
+      foreignKey: 'parentId', 
+      as: 'subFolders' 
+    });
+  };
+
+  DocumentShare.associate = (models) => {
+    DocumentShare.belongsTo(models.Document, { 
+      foreignKey: 'documentId', 
+      as: 'document' 
+    });
 
     // 文档共享关联
-    DocumentShare.belongsTo(User, {
+    DocumentShare.belongsTo(models.User, {
       foreignKey: 'sharedById',
       as: 'sharedBy'
     });
     
-    DocumentShare.belongsTo(User, {
+    DocumentShare.belongsTo(models.User, {
       foreignKey: 'userId',
       as: 'sharedTo'
     });
     
-    DocumentShare.belongsTo(Department, {
+    DocumentShare.belongsTo(models.Department, {
       foreignKey: 'departmentId',
       as: 'department'
     });
+  };
 
-    // 文档评论关联
-    Document.hasMany(DocumentComment, {
-      foreignKey: 'documentId',
-      as: 'comments'
-    });
-
-    DocumentComment.belongsTo(Document, {
+  DocumentComment.associate = (models) => {
+    DocumentComment.belongsTo(models.Document, {
       foreignKey: 'documentId',
       as: 'document'
     });
 
-    DocumentComment.belongsTo(User, {
+    DocumentComment.belongsTo(models.User, {
       foreignKey: 'userId',
       as: 'user'
     });
+  };
 
-    // 文档收藏关联
-    Document.hasMany(DocumentStar, {
-      foreignKey: 'documentId',
-      as: 'stars'
-    });
-
-    DocumentStar.belongsTo(Document, {
+  DocumentStar.associate = (models) => {
+    DocumentStar.belongsTo(models.Document, {
       foreignKey: 'documentId',
       as: 'document'
     });
 
-    DocumentStar.belongsTo(User, {
+    DocumentStar.belongsTo(models.User, {
       foreignKey: 'userId',
       as: 'user'
     });
-
-    // 文档权限和用户、部门的关联
-    DocumentPermission.belongsTo(User, { foreignKey: 'targetId', as: 'user', constraints: false });
-    DocumentPermission.belongsTo(Department, { foreignKey: 'targetId', as: 'department', constraints: false });
   };
 
   return {
@@ -521,7 +573,6 @@ module.exports = (sequelize, DataTypes) => {
     DocumentShare,
     DocumentVersion,
     DocumentComment,
-    DocumentStar,
-    defineAssociations
+    DocumentStar
   };
 };

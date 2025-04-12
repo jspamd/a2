@@ -33,6 +33,9 @@ const { checkAndInstallDependencies } = require('./utils/checkDependencies');
 // 数据库配置
 const dbConfig = require('./config/database');
 
+// 导入错误处理中间件
+const { errorHandler } = require('./middleware/errorHandler');
+
 // 创建 Express 应用
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3002; // 显式转换 PORT 为数字类型
@@ -175,30 +178,23 @@ app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/users', require('./routes/user.routes'));
 app.use('/api/workflows', require('./routes/workflow.routes'));
 app.use('/api/monitor', require('./routes/monitor.routes'));
-// app.use('/api/documents', require('./routes/document.routes'));
-// app.use('/api/departments', require('./routes/department.routes'));
-// app.use('/api/roles', require('./routes/role.routes'));
+app.use('/api/documents', require('./routes/document.routes'));
+app.use('/api/departments', require('./routes/department.routes'));
+app.use('/api/roles', require('./routes/role.routes'));
 // app.use('/api/schedules', require('./routes/schedule.routes'));
 // app.use('/api/announcements', require('./routes/announcement.routes'));
 // app.use('/api/attendance', require('./routes/attendance.routes'));
 
 // 404错误处理
-app.use((req, res) => {
+app.use((req, res, next) => {
   logger.warn('未找到路由:', req.method, req.url);
-  res.status(404).json({
-    status: 'error',
-    message: '未找到请求的资源'
-  });
+  const error = new Error('未找到请求的资源');
+  error.statusCode = 404;
+  next(error);
 });
 
-// 错误处理中间件
-app.use((err, req, res, next) => {
-  logger.error('服务器错误:', err);
-  res.status(err.status || 500).json({
-    status: 'error',
-    message: process.env.NODE_ENV === 'development' ? err.message : '服务器内部错误'
-  });
-});
+// 使用统一的错误处理中间件
+app.use(errorHandler);
 
 // 启动应用
 const startApp = async () => {

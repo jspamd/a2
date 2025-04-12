@@ -13,7 +13,7 @@ const writeFileAsync = util.promisify(fs.writeFile);
 
 // 获取数据库模型
 let models, sequelize;
-let Document, DocumentCategory, DocumentVersion, DocumentComment, DocumentShare, DocumentPermission, User, Department;
+let Document, DocumentCategory, DocumentVersion, DocumentComment, DocumentShare, DocumentPermission, User, Department, Folder, DocumentStar;
 
 const getModels = async () => {
   if (!models) {
@@ -27,6 +27,8 @@ const getModels = async () => {
     DocumentPermission = models.DocumentPermission;
     User = models.User;
     Department = models.Department;
+    Folder = models.Folder;
+    DocumentStar = models.DocumentStar;
   }
   return models;
 };
@@ -35,6 +37,27 @@ const getModels = async () => {
 const ensureModelsInitialized = async () => {
   await getModels();
 };
+
+// 自动调用ensureModelsInitialized的高阶函数
+const withModels = (handler) => {
+  return async (req, res, next) => {
+    try {
+      await ensureModelsInitialized();
+      return await handler(req, res, next);
+    } catch (error) {
+      next(error);
+    }
+  };
+};
+
+// 将所有控制器方法包装以确保模型初始化
+// 这样可以避免在每个方法中手动调用ensureModelsInitialized
+Object.keys(exports).forEach(key => {
+  if (typeof exports[key] === 'function' && key !== 'withModels') {
+    const originalHandler = exports[key];
+    exports[key] = withModels(originalHandler);
+  }
+});
 
 // 文件上传目录
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../../uploads/documents');
@@ -77,6 +100,8 @@ exports.getDocumentCategories = async (req, res, next) => {
  */
 exports.getAllDocuments = async (req, res, next) => {
   try {
+    await ensureModelsInitialized();
+    
     const userId = req.user.id;
     const userDepartmentId = req.user.departmentId || null;
     
@@ -1277,6 +1302,8 @@ exports.deleteDocumentComment = async (req, res, next) => {
  */
 exports.downloadDocument = async (req, res, next) => {
   try {
+    await ensureModelsInitialized();
+    
     const documentId = req.params.id;
     const userId = req.user.id;
 
@@ -1291,12 +1318,42 @@ exports.downloadDocument = async (req, res, next) => {
       throw new AppError('文档不存在', 404);
     }
 
-    const filePath = path.join(UPLOAD_DIR, document.filePath);
+    // 对于HTML类型文档，生成并下载HTML文件
+    if (document.type === 'html') {
+      const htmlContent = document.content || '';
+      const tempFilePath = path.join(UPLOAD_DIR, `${document.id}_${Date.now()}.html`);
+      
+      // 写入临时文件
+      await writeFileAsync(tempFilePath, htmlContent);
+      
+      // 下载后删除临时文件
+      res.download(tempFilePath, `${document.title}.html`, (err) => {
+        if (err) {
+          logger.error('下载HTML文档时发生错误:', err);
+        }
+        // 尝试删除临时文件
+        fs.unlink(tempFilePath, (unlinkErr) => {
+          if (unlinkErr) {
+            logger.error('删除临时HTML文件失败:', unlinkErr);
+          }
+        });
+      });
+      return;
+    }
+
+    // 对于普通文件类型的文档
+    const filePath = document.path;
+    if (!filePath) {
+      throw new AppError('文件路径不存在', 404);
+    }
+
+    // 检查文件是否存在
     if (!fs.existsSync(filePath)) {
       throw new AppError('文件不存在', 404);
     }
 
-    res.download(filePath, document.originalName);
+    // 下载文件
+    res.download(filePath, document.originalName || `document_${document.id}.${path.extname(filePath)}`);
   } catch (error) {
     logger.error('下载文档失败', { error: error.message });
     next(error);
@@ -1387,6 +1444,8 @@ async function checkDocumentAccess(documentId, userId, userRoles, userDepartment
  */
 exports.createDocument = async (req, res, next) => {
   try {
+    await ensureModelsInitialized();
+    
     const userId = req.user.id;
     const { title, content, description, categoryId, isPublic } = req.body;
 
@@ -1518,6 +1577,8 @@ exports.updateDocumentPermissions = async (req, res, next) => {
  */
 exports.createFolder = async (req, res, next) => {
   try {
+    await ensureModelsInitialized();
+    
     const userId = req.user.id;
     const { title, description, parentId, isPublic } = req.body;
 

@@ -96,11 +96,20 @@ exports.register = async (req, res) => {
 /**
  * 用户登录
  */
-exports.login = async (req, res) => {
-  const { username, password } = req.body;
-  logger.info('收到登录请求:', { username });
-
+exports.login = async (req, res, next) => {
   try {
+    const { username, password } = req.body;
+    
+    // 验证必填字段
+    if (!username || !password) {
+      return res.status(400).json({
+        status: 'error',
+        message: '用户名和密码为必填项'
+      });
+    }
+    
+    logger.info('收到登录请求:', { username });
+
     logger.info('正在初始化模型...');
     await ensureModelsInitialized();
     logger.info('模型初始化完成');
@@ -165,11 +174,20 @@ exports.login = async (req, res) => {
 
     // 生成令牌
     logger.info('正在生成访问令牌...');
+    // 获取用户角色代码
+    let roleCode = null;
+    if (user.roles && user.roles.length > 0) {
+      roleCode = user.roles[0].code;
+      logger.info(`用户角色: ${roleCode}`);
+    } else {
+      logger.warn('用户没有关联角色');
+    }
+
     const accessToken = jwt.sign(
       { 
         id: user.id, 
         username: user.username,
-        role: user.roles && user.roles.length > 0 ? user.roles[0].code : null
+        role: roleCode
       },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '1d' }
@@ -181,7 +199,7 @@ exports.login = async (req, res) => {
       { 
         id: user.id, 
         username: user.username,
-        role: user.roles && user.roles.length > 0 ? user.roles[0].code : null
+        role: roleCode
       },
       process.env.JWT_REFRESH_SECRET,
       { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
@@ -205,7 +223,7 @@ exports.login = async (req, res) => {
           name: user.name,
           avatar: user.avatar,
           status: user.status,
-          role: user.roles && user.roles.length > 0 ? user.roles[0].code : null,
+          role: roleCode,
           lastLoginAt: user.lastLoginAt
         }
       }

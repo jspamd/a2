@@ -75,23 +75,12 @@ exports.verifyToken = (req, res, next) => {
 exports.checkRole = (roles) => {
   return async (req, res, next) => {
     try {
-      const { User, Role } = await ensureModelsInitialized();
-      const userId = req.userId;
-      
-      // 获取用户及其角色
-      const user = await User.findByPk(userId, {
-        include: [{ model: Role }]
-      });
-      
-      if (!user) {
-        return res.status(404).json({
-          status: 'error',
-          message: '用户不存在'
-        });
-      }
+      // 直接从req.user中获取角色信息
+      // JWT令牌中存储的是单个role而非roles数组
+      const userRole = req.user.role;
       
       // 检查用户角色是否在允许列表中
-      const hasRole = user.Roles.some(role => roles.includes(role.code));
+      const hasRole = roles.includes(userRole);
       
       if (!hasRole) {
         return res.status(403).json({
@@ -125,6 +114,7 @@ exports.checkPermission = (permissions) => {
       const user = await User.findByPk(userId, {
         include: [{
           model: Role,
+          as: 'roles',
           include: ['permissions']
         }]
       });
@@ -139,7 +129,7 @@ exports.checkPermission = (permissions) => {
       // 检查用户是否拥有所需权限
       let hasPermission = false;
       
-      for (const role of user.Roles) {
+      for (const role of user.roles) {
         for (const rolePermission of role.permissions) {
           if (permissions.includes(rolePermission.code)) {
             hasPermission = true;

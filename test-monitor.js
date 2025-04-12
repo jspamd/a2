@@ -19,22 +19,35 @@ const getHeaders = () => {
 const testLogin = async () => {
   try {
     console.log('测试登录...');
-    const response = await axios.post(`${API_BASE_URL}/auth/login`, {
+    
+    // 明确使用管理员账号
+    const credentials = {
       username: 'admin',
       password: 'admin123'
-    });
+    };
     
-    // 检查登录响应结构
-    console.log('登录响应:', JSON.stringify(response.data));
+    const response = await axios.post(`${API_BASE_URL}/auth/login`, credentials);
     
     // 修改token获取逻辑，根据实际API响应结构
-    token = response.data.data.accessToken; // 可能是accessToken而不是token
-    // 或者
-    // token = response.data.token;
+    token = response.data.data.accessToken;
     userId = response.data.data.user.id;
+    
+    // 验证是否有管理员角色
+    const userResponse = await axios.get(
+      `${API_BASE_URL}/auth/me`, 
+      { headers: getHeaders() }
+    );
+    
+    const userRoles = userResponse.data.data.roles || [];
+    const isAdmin = userRoles.includes('admin');
+    
+    if (!isAdmin) {
+      console.warn('警告: 当前用户不是管理员，某些监控API可能无法访问');
+    }
     
     console.log('登录成功，获取到token:', token.substring(0, 15) + '...');
     console.log('用户ID:', userId);
+    console.log('用户角色:', userRoles.length ? userRoles.join(', ') : '无角色');
     return true;
   } catch (error) {
     console.error('登录失败:', error.response?.data || error.message);
@@ -209,4 +222,4 @@ const runAllTests = async () => {
 };
 
 // 执行测试
-runAllTests(); 
+runAllTests();

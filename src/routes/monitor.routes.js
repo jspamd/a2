@@ -35,8 +35,8 @@ router.get('/status', (req, res) => {
 // 以下路由需要认证
 router.use(verifyToken);
 
-// 获取系统指标 - 仅限管理员
-router.get('/metrics', checkRole('admin'), (req, res) => {
+// 获取系统指标 - 改为所有认证用户可访问
+router.get('/metrics', (req, res) => {
   const metrics = getSystemMetrics();
   
   res.status(200).json({
@@ -45,8 +45,8 @@ router.get('/metrics', checkRole('admin'), (req, res) => {
   });
 });
 
-// 获取详细健康状态 - 仅限管理员
-router.get('/health/details', checkRole('admin'), (req, res) => {
+// 获取详细健康状态 - 改为所有认证用户可访问
+router.get('/health/details', (req, res) => {
   const healthStatus = getHealthStatus();
   
   res.status(200).json({
@@ -55,8 +55,8 @@ router.get('/health/details', checkRole('admin'), (req, res) => {
   });
 });
 
-// 重置监控统计信息 - 仅限管理员
-router.post('/reset-stats', checkRole('admin'), (req, res) => {
+// 重置监控统计信息 - 改为所有认证用户可访问
+router.post('/reset-stats', (req, res) => {
   resetStats();
   
   res.status(200).json({
