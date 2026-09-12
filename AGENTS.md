@@ -26,7 +26,7 @@ Env vars agents need by name (values live in `.env` / `.env.example`):
 - MySQL: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
 - Auth: `JWT_SECRET`, `JWT_REFRESH_SECRET`, `JWT_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN`
 
-Dialect is hardcoded to `mysql`. The named database (`DB_NAME`) must exist before the current startup path can connect. `src/config/database.js` exports an unused `dbConnect()` helper that would `CREATE DATABASE IF NOT EXISTS`; `src/app.js` does **not** call it.
+Dialect is hardcoded to `mysql`. `src/app.js` still expects `DB_NAME` to exist before it connects. Use `node init-db.js` to create it (the app itself does not call `src/config/database.js`'s unused `dbConnect()` helper).
 
 ## How to start
 
@@ -34,12 +34,13 @@ Portable sequence (any machine):
 
 1. Install Node deps: `npm install`
 2. Start MySQL so it accepts TCP on `DB_HOST`:`DB_PORT`
-3. Ensure the database named `DB_NAME` exists (utf8mb4). Example using env vars already loaded from `.env`:
+3. Create the database (if needed), sync models, and seed base data:
 
 ```bash
-mysql -u"$DB_USER" -p"$DB_PASSWORD" -h"$DB_HOST" -P"${DB_PORT:-3306}" \
-  -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+node init-db.js
 ```
+
+This runs `CREATE DATABASE IF NOT EXISTS` for `DB_NAME` (utf8mb4), then uses the same models factory as `src/app.js`. It does **not** drop existing data unless you pass `--force` or set `INIT_DB_FORCE=true`.
 
 4. Start the API: `npm run dev` (nodemon) or `npm start`
 5. Wait ~8s+ for `服务器运行在端口 3002`
@@ -61,13 +62,13 @@ Unix socket under `/var/run/mysqld` may be unreadable to the non-root user. Use 
 
 ## Database initialization
 
-- On startup the app **auto-syncs models** (`sequelize.sync({ force: false })`) and seeds a default admin user via `src/seeders/admin-user.js`. Data persists across restarts.
-- **Do not run `node init-db.js`.** README documents it, but the script is **broken**: it `require('./src/models')` and then reads `.sequelize` on the result, while `src/models` exports an **async factory function**. It may drop/recreate `DB_NAME` and then throw `Cannot read properties of undefined (reading 'authenticate')`.
+- Documented first-time setup: `node init-db.js`. It awaits the `src/models` async factory, creates `DB_NAME` if needed, syncs with `force: false`, and seeds via `src/config/initData.js`. Rebuild only with `--force` or `INIT_DB_FORCE=true` (destroys data).
+- On startup the app **also auto-syncs models** (`sequelize.sync({ force: false })`) and seeds a default admin user via `src/seeders/admin-user.js`. Data persists across restarts. The named database must exist first — `init-db.js` is the supported way to create it.
 - Seeded admin username/password are documented in the README (“默认管理员账户”). Use those locally; do not copy them into commits or this file.
 
 ### Admin user ↔ admin role
 
-The startup seeder (`src/seeders/admin-user.js`) is idempotent: it find-or-creates the `admin` user and `admin` role and inserts the `UserRoles` join row when missing. A fresh login token should carry `role: admin`, so admin-gated endpoints (including `POST /api/users`) work without a manual repair.
+The startup seeder (`src/seeders/admin-user.js`) is idempotent: it find-or-creates the `admin` user and `admin` role and inserts the `UserRoles` join row when missing. `node init-db.js` uses the same `ensureAdminUserAndRole` helper after seeding. A fresh login token should carry `role: admin`, so admin-gated endpoints (including `POST /api/users`) work without a manual repair.
 
 Databases that were seeded **before** this bind existed can still be repaired with:
 
@@ -104,7 +105,7 @@ curl -s -X POST "http://localhost:${PORT:-3002}/api/users" \
 These are pre-existing repo issues, not environment problems:
 
 - **Lint**: `npm run lint` is non-functional. `eslint` is not a declared dependency and there is no `eslint.config.*` / `.eslintrc*` in the repo.
-- **Jest**: `npm test` runs `tests/workflow.test.js` against in-memory SQLite (no MySQL needed). The suite initializes models via `src/models/registerModels.js`, the same loader the app uses, so associations such as `User` → `Department` / `Role` are present.
+- **Jest**: `npm test` runs `tests/workflow.test.js`, `tests/admin-role-binding.test.js`, and `tests/init-db.test.js` (no MySQL needed). The workflow suite initializes models via `src/models/registerModels.js`, the same loader the app uses, so associations such as `User` → `Department` / `Role` are present.
 - **Ad-hoc scripts**: root-level `test-*.js` files (`test-login.js`, `test-base.js`, etc.) are standalone axios integration scripts, **not** Jest tests. Run them with `node test-login.js` only while the API + MySQL are up.
 - **Build**: none. Plain CommonJS; no transpile/bundle step.
 
