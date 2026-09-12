@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node start.js",
     "dev": "nodemon start.js",
+    "init-db": "node init-db.js",
     "test": "jest --detectOpenHandles --verbose",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\""

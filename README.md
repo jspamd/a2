@@ -60,8 +60,8 @@
 ## 安装与运行
 ```bash
 # 克隆项目
-git clone https://github.com/您的用户名/oa-management-system.git
-cd oa-management-system
+git clone https://github.com/jspamd/a2.git
+cd a2
 
 # 安装依赖
 npm install
@@ -70,8 +70,12 @@ npm install
 cp .env.example .env
 # 编辑.env文件，配置数据库等信息
 
-# 初始化数据库
+# 初始化数据库（创建库、同步模型、写入基础数据；默认不删除已有数据）
 node init-db.js
+
+# 仅在需要清空并重建时使用（会删除 DB_NAME 中的全部数据）
+# node init-db.js --force
+# 或 INIT_DB_FORCE=true node init-db.js
 
 # 开发环境运行
 npm run dev
@@ -82,8 +86,10 @@ npm start
 
 ## 系统配置说明
 1. 数据库配置
-   - 在.env文件中设置数据库连接信息(DB_HOST, DB_USER, DB_PASSWORD等)
-   - 首次运行前需执行`node init-db.js`初始化数据库
+   - 在.env文件中设置数据库连接信息(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME等)
+   - 首次运行前执行`node init-db.js`：若库不存在则创建，同步表结构，写入基础角色/部门/管理员
+   - 默认不会删除已有数据。只有显式传入`--force`或设置`INIT_DB_FORCE=true`才会重建数据库
+   - 应用启动时也会自动同步模型（`force: false`）并尝试写入管理员账号
 
 2. 端口配置
    - 默认端口为3002，可在.env中修改PORT参数
