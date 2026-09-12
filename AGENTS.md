@@ -65,15 +65,17 @@ Unix socket under `/var/run/mysqld` may be unreadable to the non-root user. Use 
 - **Do not run `node init-db.js`.** README documents it, but the script is **broken**: it `require('./src/models')` and then reads `.sequelize` on the result, while `src/models` exports an **async factory function**. It may drop/recreate `DB_NAME` and then throw `Cannot read properties of undefined (reading 'authenticate')`.
 - Seeded admin username/password are documented in the README (“默认管理员账户”). Use those locally; do not copy them into commits or this file.
 
-### Critical: admin user is not linked to the admin role
+### Admin user ↔ admin role
 
-The startup seeder upserts the `admin` **user** and the `admin` **role** but does **not** insert a `UserRoles` row. `checkRole` reads the role from the JWT, which is derived from the user’s linked roles, so a fresh admin token has `role: null` and **admin-gated endpoints return 403** (including `POST /api/users`).
+The startup seeder (`src/seeders/admin-user.js`) is idempotent: it find-or-creates the `admin` user and `admin` role and inserts the `UserRoles` join row when missing. A fresh login token should carry `role: admin`, so admin-gated endpoints (including `POST /api/users`) work without a manual repair.
 
-Run this **once** after the first successful start, then **log in again** so the new token carries `role: admin`:
+Databases that were seeded **before** this bind existed can still be repaired with:
 
 ```bash
 node fix-admin-role.js
 ```
+
+Then **log in again** so the new token carries `role: admin`. The script calls the same helper as the seeder.
 
 ## Smoke tests (placeholders only)
 
@@ -88,7 +90,7 @@ curl -s -X POST "http://localhost:${PORT:-3002}/api/auth/login" \
   -H 'Content-Type: application/json' \
   -d '{"username":"<ADMIN_USER>","password":"<ADMIN_PASSWORD>"}'
 
-# create a user (admin JWT required; 403 until fix-admin-role.js + re-login)
+# create a user (admin JWT required; token.role must be "admin")
 curl -s -X POST "http://localhost:${PORT:-3002}/api/users" \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer <TOKEN>" \

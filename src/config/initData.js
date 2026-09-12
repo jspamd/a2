@@ -1,5 +1,6 @@
 const bcrypt = require('bcrypt');
 const getModels = require('../models');
+const { ensureAdminUserAndRole } = require('../seeders/admin-user');
 
 /**
  * 初始化系统基础数据
@@ -110,12 +111,14 @@ const initializeSystemData = async () => {
         name: '系统管理员',
         email: 'admin@example.com',
         status: 'active',
-        departmentId: rootDepartment.id,
-        roleId: adminRole.id  // 直接设置roleId
+        departmentId: rootDepartment.id
       });
       
       console.log('管理员账号创建完成');
     }
+
+    // User.roleId is not a column; JWT/checkRole read the UserRoles join table.
+    await ensureAdminUserAndRole({ User, Role });
     
     // 检查基础权限是否存在
     const permissionCount = await Permission.count();
