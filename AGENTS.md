@@ -104,7 +104,7 @@ curl -s -X POST "http://localhost:${PORT:-3002}/api/users" \
 These are pre-existing repo issues, not environment problems:
 
 - **Lint**: `npm run lint` is non-functional. `eslint` is not a declared dependency and there is no `eslint.config.*` / `.eslintrc*` in the repo.
-- **Jest**: `npm test` runs `tests/workflow.test.js` against in-memory SQLite (no MySQL needed). It **fails** because the suite only loads `workflow` + `user` models, while `User.associate` references the unloaded `Department` model (`User.belongsTo(undefined)`).
+- **Jest**: `npm test` runs `tests/workflow.test.js` against in-memory SQLite (no MySQL needed). The suite initializes models via `src/models/registerModels.js`, the same loader the app uses, so associations such as `User` → `Department` / `Role` are present.
 - **Ad-hoc scripts**: root-level `test-*.js` files (`test-login.js`, `test-base.js`, etc.) are standalone axios integration scripts, **not** Jest tests. Run them with `node test-login.js` only while the API + MySQL are up.
 - **Build**: none. Plain CommonJS; no transpile/bundle step.
 

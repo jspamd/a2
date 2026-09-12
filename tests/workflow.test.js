@@ -1,6 +1,5 @@
 const { Sequelize } = require('sequelize');
-const workflowModel = require('../src/models/workflow.model');
-const userModel = require('../src/models/user.model');
+const { registerModels } = require('../src/models/registerModels');
 
 describe('工作流模型测试', () => {
   let sequelize;
@@ -16,22 +15,9 @@ describe('工作流模型测试', () => {
       });
       console.log('数据库连接创建成功');
 
-      // 初始化所有模型
-      const workflowModels = workflowModel(sequelize);
-      const { User } = userModel(sequelize);
-      
-      models = {
-        ...workflowModels,
-        User
-      };
+      // Load every model and wire associations the same way the app does.
+      models = registerModels(sequelize);
       console.log('模型初始化成功');
-
-      // 设置关联
-      Object.values(models).forEach(model => {
-        if (typeof model.associate === 'function') {
-          model.associate(models);
-        }
-      });
       console.log('关联设置成功');
 
       // 同步数据库
