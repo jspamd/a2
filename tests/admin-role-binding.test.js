@@ -1,9 +1,22 @@
 const { Sequelize } = require('sequelize');
+const jwt = require('jsonwebtoken');
 const userModel = require('../src/models/user.model');
 const roleModel = require('../src/models/role.model');
 const departmentModel = require('../src/models/department.model');
 const permissionModel = require('../src/models/permission.model');
 const { ensureAdminUserAndRole } = require('../src/seeders/admin-user');
+
+function loginRoleFromUser(user) {
+  return user.roles && user.roles.length > 0 ? user.roles[0].code : null;
+}
+
+function signLoginToken(user) {
+  return jwt.sign(
+    { id: user.id, username: user.username, role: loginRoleFromUser(user) },
+    'test-jwt-secret',
+    { expiresIn: '1d' }
+  );
+}
 
 /**
  * Load only the models the admin bind needs. Avoid src/models/index.js
@@ -65,6 +78,10 @@ describe('ensureAdminUserAndRole', () => {
     expect(admin).not.toBeNull();
     expect(admin.roles).toHaveLength(1);
     expect(admin.roles[0].code).toBe('admin');
+
+    const decoded = jwt.verify(signLoginToken(admin), 'test-jwt-secret');
+    expect(decoded.role).toBe('admin');
+    expect(decoded.username).toBe('admin');
   });
 
   test('is idempotent on re-seed and does not duplicate UserRoles', async () => {
@@ -108,6 +125,7 @@ describe('ensureAdminUserAndRole', () => {
 
     const before = await loadAdminWithRoles(User, Role);
     expect(before.roles).toHaveLength(0);
+    expect(jwt.verify(signLoginToken(before), 'test-jwt-secret').role).toBeNull();
 
     const result = await ensureAdminUserAndRole(models);
 
@@ -120,5 +138,6 @@ describe('ensureAdminUserAndRole', () => {
 
     const after = await loadAdminWithRoles(User, Role);
     expect(after.roles.map((r) => r.code)).toEqual(['admin']);
+    expect(jwt.verify(signLoginToken(after), 'test-jwt-secret').role).toBe('admin');
   });
 });
