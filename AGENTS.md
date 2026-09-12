@@ -102,9 +102,7 @@ curl -s -X POST "http://localhost:${PORT:-3002}/api/users" \
 
 ## Lint / test / build caveats
 
-These are pre-existing repo issues, not environment problems:
-
-- **Lint**: `npm run lint` is non-functional. `eslint` is not a declared dependency and there is no `eslint.config.*` / `.eslintrc*` in the repo.
+- **Lint**: `npm run lint` runs ESLint 10 (flat config in `eslint.config.cjs`) with `js/recommended` for this CommonJS Node/Express app. A few recommended rules that fire on existing controller/model patterns (`no-undef`, `no-unused-vars`, plus assignment/escape/prototype checks) are turned off so lint stays useful without a mass rewrite. A clean tree should exit 0.
 - **Jest**: `npm test` runs `tests/workflow.test.js`, `tests/admin-role-binding.test.js`, and `tests/init-db.test.js` (no MySQL needed). The workflow suite initializes models via `src/models/registerModels.js`, the same loader the app uses, so associations such as `User` → `Department` / `Role` are present.
 - **Ad-hoc scripts**: root-level `test-*.js` files (`test-login.js`, `test-base.js`, etc.) are standalone axios integration scripts, **not** Jest tests. Run them with `node test-login.js` only while the API + MySQL are up.
 - **Build**: none. Plain CommonJS; no transpile/bundle step.
